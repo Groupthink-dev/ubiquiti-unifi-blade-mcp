@@ -9,6 +9,9 @@ version: 0.1.0
 license: MIT
 homepage: https://github.com/groupthink-dev/ubiquiti-unifi-blade-mcp
 repository: https://github.com/groupthink-dev/ubiquiti-unifi-blade-mcp
+tier: certified
+author_type: first-party
+readiness: stub
 
 contract: network-v1
 multi_instance: true
