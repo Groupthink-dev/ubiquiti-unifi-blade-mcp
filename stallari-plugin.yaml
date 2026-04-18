@@ -1,0 +1,120 @@
+name: ubiquiti-unifi-blade-mcp
+version: "0.1.0"
+description: "Ubiquiti UniFi network monitoring and security — device health, client visibility, firewall policies, traffic routes, DPI restrictions, and port forwards"
+author: groupthink-dev
+licence: MIT
+tier: certified
+author_type: first-party
+readiness: production
+homepage: https://github.com/groupthink-dev/ubiquiti-unifi-blade-mcp
+contract: network-v1
+multi_instance: true
+
+services:
+  network:
+    info: unifi_info
+    devices: unifi_devices
+    device: unifi_device
+    clients: unifi_clients
+    client: unifi_client
+    firewall: unifi_firewall
+    port_forwards: unifi_port_forwards
+    traffic_routes: unifi_traffic_routes
+    traffic_rules: unifi_traffic_rules
+    dpi: unifi_dpi
+    wlans: unifi_wlans
+    sites: unifi_sites
+    unblock_client: unifi_unblock_client
+    reconnect_client: unifi_reconnect_client
+    toggle_traffic_route: unifi_toggle_traffic_route
+    block_client: unifi_block_client
+    toggle_wlan: unifi_toggle_wlan
+    restart_device: unifi_restart_device
+
+install:
+  runtime: uv
+  package: ubiquiti-unifi-blade-mcp
+
+setup:
+  auth_model: basic
+  complexity: trivial
+  icon: "wifi.router"
+  product: "Ubiquiti UniFi"
+  blurb: "Monitor your UniFi network — device health, connected clients, firewall policies, traffic routes, and DPI restrictions. Multi-controller support for home and office."
+  fields:
+    - key: UNIFI_HOST
+      label: "Controller Host"
+      secret: false
+      required: true
+      placeholder: "192.168.1.1"
+      help: "IP address or hostname of the UniFi controller"
+    - key: UNIFI_USERNAME
+      label: "Username"
+      secret: false
+      required: true
+      placeholder: "admin"
+    - key: UNIFI_PASSWORD
+      label: "Password"
+      secret: true
+      required: true
+      placeholder: "Controller password"
+    - key: UNIFI_PORT
+      label: "Port"
+      type: string
+      secret: false
+      required: false
+      help: "Controller port (443 for UniFi OS, 8443 for classic)"
+    - key: UNIFI_VERIFY_SSL
+      label: "Verify SSL"
+      type: boolean
+      secret: false
+      required: false
+      help: "Disable for self-signed certificates (common on UDM hardware)"
+    - key: UNIFI_WRITE_ENABLED
+      label: "Enable write operations"
+      type: boolean
+      secret: false
+      required: false
+      help: "Allow client blocking, WLAN toggling, and device restarts"
+  test:
+    tool: unifi_info
+    expect: "connected"
+  prerequisites:
+    - "UniFi controller (UDM, UDR, Cloud Key, or self-hosted)"
+    - "Local admin account on the controller"
+  help:
+    - label: "UniFi OS Console"
+      url: "https://unifi.ui.com"
+    - label: "Ubiquiti Community"
+      url: "https://community.ui.com"
+
+env:
+  - name: UNIFI_HOST
+    description: "UniFi controller IP or hostname"
+  - name: UNIFI_USERNAME
+    description: "Controller admin username"
+  - name: UNIFI_PASSWORD
+    description: "Controller admin password"
+    secret: true
+  - name: UNIFI_PORT
+    description: "Controller port (443 for UniFi OS, 8443 for classic)"
+    default: "443"
+  - name: UNIFI_VERIFY_SSL
+    description: "Verify SSL certificates (false for self-signed)"
+    default: "false"
+  - name: UNIFI_TOTP_SECRET
+    description: "Base32-encoded TOTP secret for 2FA"
+    secret: true
+  - name: UNIFI_WRITE_ENABLED
+    description: "Enable write operations (block, toggle, restart)"
+    default: "false"
+  - name: UNIFI_CONTROLLERS
+    description: "Multi-controller: comma-separated names (e.g. home,office)"
+    default: ""
+
+conformance:
+  required: "6/6"
+  recommended: "3/3"
+  optional: "2/2"
+  gated: "3/3"
+  last_tested: "2026-04-18"
