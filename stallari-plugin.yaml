@@ -2,7 +2,7 @@ name: ubiquiti-unifi-blade-mcp
 version: "0.1.0"
 description: "Ubiquiti UniFi network monitoring and security — device health, client visibility, firewall policies, traffic routes, DPI restrictions, and port forwards"
 author: groupthink-dev
-licence: MIT
+license: MIT
 tier: certified
 author_type: first-party
 readiness: production
