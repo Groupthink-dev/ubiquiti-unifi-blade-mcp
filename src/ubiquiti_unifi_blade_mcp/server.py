@@ -22,13 +22,15 @@ from ubiquiti_unifi_blade_mcp.formatters import (
     format_dpi,
     format_firewall_policies,
     format_info,
+    format_network_detail,
+    format_network_list,
     format_port_forwards,
     format_sites,
     format_traffic_routes,
     format_traffic_rules,
     format_wlan_list,
 )
-from ubiquiti_unifi_blade_mcp.models import require_write
+from ubiquiti_unifi_blade_mcp.models import network_spec_from_args, require_write
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +59,11 @@ mcp = FastMCP(
     instructions=(
         "Ubiquiti UniFi network operations. Monitor devices, view clients, "
         "inspect firewall policies, check traffic routes, and manage WLANs. "
+        "Manage networks/VLANs (list/create/update/delete) via the official "
+        "Integration API — these tools require an API key (UNIFI_API_KEY). "
         "Multi-controller support — pass controller= to target a specific controller. "
-        "Write operations (block/unblock, WLAN toggle, restart) require UNIFI_WRITE_ENABLED=true."
+        "Write operations (block/unblock, WLAN toggle, restart, network create/update/delete) "
+        "require UNIFI_WRITE_ENABLED=true; destructive ones also require confirm=true."
     ),
 )
 
@@ -104,6 +109,38 @@ async def unifi_sites(
     try:
         sites = await _get_client().get_sites(controller)
         return format_sites(sites)
+    except UniFiError as e:
+        return _error_response(e)
+
+
+# ===========================================================================
+# NETWORKS / VLANs  (Integration API — requires UNIFI_API_KEY)
+# ===========================================================================
+
+
+@mcp.tool()
+async def unifi_networks(
+    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+) -> str:
+    """List networks/VLANs: name, VLAN id, enabled/disabled, purpose, subnet. Requires UNIFI_API_KEY."""
+    try:
+        networks = await _get_client().get_networks(controller)
+        return format_network_list(networks)
+    except UniFiError as e:
+        return _error_response(e)
+
+
+@mcp.tool()
+async def unifi_network(
+    network_id: Annotated[str, Field(description="Network ID (from unifi_networks)")],
+    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+) -> str:
+    """Full detail for a single network/VLAN: VLAN id, subnet, gateway, purpose. Requires UNIFI_API_KEY."""
+    try:
+        network = await _get_client().get_network(network_id, controller)
+        if network is None:
+            return f"Error: Network {network_id} not found"
+        return format_network_detail(network)
     except UniFiError as e:
         return _error_response(e)
 
@@ -374,6 +411,98 @@ async def unifi_restart_device(
         return _error_response(e)
 
 
+@mcp.tool()
+async def unifi_create_network(
+    name: Annotated[str, Field(description="Network name (e.g. 'Services')")],
+    vlan_id: Annotated[int, Field(description="VLAN ID (e.g. 40); use 0 for the default/untagged network")],
+    subnet: Annotated[str | None, Field(description="CIDR with gateway host, e.g. '10.1.40.254/24'")] = None,
+    gateway: Annotated[str | None, Field(description="Gateway IP, e.g. '10.1.40.254'")] = None,
+    dhcp_start: Annotated[str | None, Field(description="DHCP range start, e.g. '10.1.40.100'")] = None,
+    dhcp_stop: Annotated[str | None, Field(description="DHCP range end, e.g. '10.1.40.200'")] = None,
+    purpose: Annotated[str, Field(description="Network purpose (corporate, guest, vlan-only)")] = "corporate",
+    enabled: Annotated[bool, Field(description="Whether the network is enabled")] = True,
+    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    confirm: Annotated[bool, Field(description="Must be true to confirm — creates a network/VLAN")] = False,
+) -> str:
+    """Create a network/VLAN. Requires UNIFI_API_KEY, UNIFI_WRITE_ENABLED=true and confirm=true."""
+    gate = require_write()
+    if gate:
+        return gate
+    if not confirm:
+        return "Error: Set confirm=true to create this network/VLAN."
+    try:
+        spec = network_spec_from_args(
+            name,
+            vlan_id,
+            subnet=subnet,
+            gateway=gateway,
+            dhcp_start=dhcp_start,
+            dhcp_stop=dhcp_stop,
+            purpose=purpose,
+            enabled=enabled,
+        )
+        net = await _get_client().create_network(spec, controller)
+        return f"Created network '{name}' (vlan {vlan_id})\n{format_network_detail(net)}"
+    except UniFiError as e:
+        return _error_response(e)
+
+
+@mcp.tool()
+async def unifi_update_network(
+    network_id: Annotated[str, Field(description="Network ID (from unifi_networks)")],
+    name: Annotated[str | None, Field(description="New name")] = None,
+    vlan_id: Annotated[int | None, Field(description="New VLAN ID")] = None,
+    subnet: Annotated[str | None, Field(description="New CIDR, e.g. '10.1.40.254/24'")] = None,
+    gateway: Annotated[str | None, Field(description="New gateway IP")] = None,
+    enabled: Annotated[bool | None, Field(description="Enable/disable the network")] = None,
+    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    confirm: Annotated[bool, Field(description="Must be true to confirm — modifies a network/VLAN")] = False,
+) -> str:
+    """Update a network/VLAN (only supplied fields). Requires UNIFI_API_KEY, UNIFI_WRITE_ENABLED=true, confirm=true."""
+    gate = require_write()
+    if gate:
+        return gate
+    if not confirm:
+        return "Error: Set confirm=true to update this network/VLAN."
+    patch: dict[str, object] = {}
+    if name is not None:
+        patch["name"] = name
+    if vlan_id is not None:
+        patch["vlanId"] = vlan_id
+    if subnet is not None:
+        patch["ipSubnet"] = subnet
+    if gateway is not None:
+        patch["gatewayIp"] = gateway
+    if enabled is not None:
+        patch["enabled"] = enabled
+    if not patch:
+        return "Error: No fields to update — supply at least one of name/vlan_id/subnet/gateway/enabled."
+    try:
+        net = await _get_client().update_network(network_id, patch, controller)
+        return f"Updated network {network_id}\n{format_network_detail(net)}"
+    except UniFiError as e:
+        return _error_response(e)
+
+
+@mcp.tool()
+async def unifi_delete_network(
+    network_id: Annotated[str, Field(description="Network ID (from unifi_networks)")],
+    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    confirm: Annotated[bool, Field(description="Must be true to confirm — permanently deletes the network")] = False,
+) -> str:
+    """Delete a network/VLAN. Requires UNIFI_API_KEY, UNIFI_WRITE_ENABLED=true and confirm=true."""
+    gate = require_write()
+    if gate:
+        return gate
+    if not confirm:
+        return "Error: Set confirm=true to delete this network/VLAN. This is permanent."
+    try:
+        await _get_client().delete_network(network_id, controller)
+        return f"Deleted network {network_id}"
+    except UniFiError as e:
+        return _error_response(e)
+
+
 # ===========================================================================
 # Entry point
 # ===========================================================================
@@ -384,7 +513,16 @@ def main() -> None:
     if TRANSPORT == "http":
         import uvicorn
 
-        from ubiquiti_unifi_blade_mcp.auth import BearerAuthMiddleware
+        from ubiquiti_unifi_blade_mcp.auth import BearerAuthMiddleware, get_bearer_token
+
+        # HTTP transport is a manual loopback path only — never expose it
+        # unauthenticated. Require a bearer token when http is explicitly selected.
+        if get_bearer_token() is None:
+            raise SystemExit(
+                "Refusing to start HTTP transport without auth. "
+                "Set UNIFI_MCP_API_TOKEN to a non-empty value (the bearer token "
+                "clients must send), or use the default stdio transport."
+            )
 
         app = mcp.http_app()
         app.add_middleware(BearerAuthMiddleware)

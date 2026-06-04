@@ -34,6 +34,41 @@ def mock_env_write(monkeypatch: pytest.MonkeyPatch, mock_env: None) -> None:
 
 
 @pytest.fixture()
+def mock_env_apikey(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Set Integration-API-key (no username/password) environment variables."""
+    monkeypatch.delenv("UNIFI_CONTROLLERS", raising=False)
+    monkeypatch.delenv("UNIFI_USERNAME", raising=False)
+    monkeypatch.delenv("UNIFI_PASSWORD", raising=False)
+    monkeypatch.setenv("UNIFI_HOST", "192.168.1.1")
+    monkeypatch.setenv("UNIFI_API_KEY", "test-api-key")
+
+
+@pytest.fixture()
+def sample_networks() -> list[dict[str, Any]]:
+    """Sample normalized network/VLAN list."""
+    return [
+        {
+            "id": "n1",
+            "name": "Management",
+            "vlan": 1,
+            "enabled": True,
+            "purpose": "corporate",
+            "subnet": "10.1.1.254/24",
+            "gateway": "10.1.1.254",
+        },
+        {
+            "id": "n2",
+            "name": "Guest",
+            "vlan": 30,
+            "enabled": False,
+            "purpose": "guest",
+            "subnet": "",
+            "gateway": "",
+        },
+    ]
+
+
+@pytest.fixture()
 def sample_devices() -> list[dict[str, Any]]:
     """Sample device list."""
     return [

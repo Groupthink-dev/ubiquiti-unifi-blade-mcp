@@ -250,6 +250,52 @@ def format_wlan_list(wlans: list[dict[str, Any]]) -> str:
 
 
 # ------------------------------------------------------------------
+# Networks / VLANs
+# ------------------------------------------------------------------
+
+
+def format_network_list(networks: list[dict[str, Any]]) -> str:
+    """Format networks / VLANs as compact lines."""
+    if not networks:
+        return "(no networks)"
+    lines = []
+    for n in networks:
+        parts = [n.get("name", "?")]
+        vlan = n.get("vlan")
+        if vlan not in (None, ""):
+            parts.append(f"vlan={vlan}")
+        parts.append("enabled" if n.get("enabled") else "DISABLED")
+        purpose = n.get("purpose", "")
+        if purpose:
+            parts.append(f"purpose={purpose}")
+        subnet = n.get("subnet", "")
+        if subnet:
+            parts.append(f"subnet={subnet}")
+        parts.append(f"id={n.get('id', '?')}")
+        lines.append(" | ".join(parts))
+    return "\n".join(lines)
+
+
+def format_network_detail(net: dict[str, Any]) -> str:
+    """Format a single network / VLAN with full details."""
+    lines = [f"Name: {net.get('name', '?')}"]
+    vlan = net.get("vlan")
+    lines.append(f"VLAN: {vlan if vlan not in (None, '') else '?'}")
+    lines.append(f"Enabled: {net.get('enabled', False)}")
+    purpose = net.get("purpose", "")
+    if purpose:
+        lines.append(f"Purpose: {purpose}")
+    subnet = net.get("subnet", "")
+    if subnet:
+        lines.append(f"Subnet: {subnet}")
+    gateway = net.get("gateway", "")
+    if gateway:
+        lines.append(f"Gateway: {gateway}")
+    lines.append(f"ID: {net.get('id', '?')}")
+    return "\n".join(lines)
+
+
+# ------------------------------------------------------------------
 # Firewall & Security
 # ------------------------------------------------------------------
 

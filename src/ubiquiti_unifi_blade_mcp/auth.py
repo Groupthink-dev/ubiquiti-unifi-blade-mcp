@@ -3,8 +3,12 @@
 Bearer token auth for remote/tunnel access. Set ``UNIFI_MCP_API_TOKEN`` env var.
 Every HTTP request must include ``Authorization: Bearer <token>``.
 
-If the env var is **unset or empty**, bearer auth is disabled — this keeps
-localhost-only setups working without any configuration.
+The HTTP transport is a manual loopback-only path; the default (and the only
+mode used when launched by the Stallari harness) is stdio. When http transport
+is explicitly selected, ``server.main()`` refuses to start unless a non-empty
+``UNIFI_MCP_API_TOKEN`` is configured, so an unauthenticated listener is never
+opened. This middleware still treats an unset token as "auth disabled" as a
+defensive default for any direct/embedded ASGI use.
 """
 
 from __future__ import annotations

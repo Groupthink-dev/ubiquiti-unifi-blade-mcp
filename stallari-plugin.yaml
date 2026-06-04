@@ -1,6 +1,6 @@
 name: ubiquiti-unifi-blade-mcp
-version: "0.1.0"
-description: "Ubiquiti UniFi network monitoring and security — device health, client visibility, firewall policies, traffic routes, DPI restrictions, and port forwards"
+version: "0.3.0"
+description: "Ubiquiti UniFi network monitoring, security, and network/VLAN management — device health, client visibility, firewall policies, traffic routes, DPI restrictions, port forwards, and network/VLAN CRUD via the Integration API"
 author: groupthink-dev
 license: MIT
 tier: certified
@@ -24,12 +24,17 @@ services:
     dpi: unifi_dpi
     wlans: unifi_wlans
     sites: unifi_sites
+    networks: unifi_networks
+    network: unifi_network
     unblock_client: unifi_unblock_client
     reconnect_client: unifi_reconnect_client
     toggle_traffic_route: unifi_toggle_traffic_route
     block_client: unifi_block_client
     toggle_wlan: unifi_toggle_wlan
     restart_device: unifi_restart_device
+    create_network: unifi_create_network
+    update_network: unifi_update_network
+    delete_network: unifi_delete_network
 
 install:
   runtime: uv
@@ -40,7 +45,7 @@ setup:
   complexity: trivial
   icon: "wifi.router"
   product: "Ubiquiti UniFi"
-  blurb: "Monitor your UniFi network — device health, connected clients, firewall policies, traffic routes, and DPI restrictions. Multi-controller support for home and office."
+  blurb: "Monitor and manage your UniFi network — device health, connected clients, firewall policies, traffic routes, DPI restrictions, and network/VLAN creation. Multi-controller support for home and office."
   fields:
     - key: UNIFI_HOST
       label: "Controller Host"
@@ -51,13 +56,21 @@ setup:
     - key: UNIFI_USERNAME
       label: "Username"
       secret: false
-      required: true
+      required: false
       placeholder: "admin"
+      help: "Required for monitoring tools (device/client/firewall reads). Optional if only using network/VLAN tools via API key."
     - key: UNIFI_PASSWORD
       label: "Password"
       secret: true
-      required: true
+      required: false
       placeholder: "Controller password"
+      help: "Paired with username for monitoring tools. Optional if only using network/VLAN tools via API key."
+    - key: UNIFI_API_KEY
+      label: "Integration API Key"
+      secret: true
+      required: false
+      placeholder: "X-API-KEY value"
+      help: "Generate in UniFi Network → Settings → Control Plane → Integrations. Required for network/VLAN tools (list/create/update/delete networks)."
     - key: UNIFI_PORT
       label: "Port"
       type: string
@@ -105,6 +118,9 @@ env:
   - name: UNIFI_TOTP_SECRET
     description: "Base32-encoded TOTP secret for 2FA"
     secret: true
+  - name: UNIFI_API_KEY
+    description: "Integration API key (X-API-KEY) — required for network/VLAN tools"
+    secret: true
   - name: UNIFI_WRITE_ENABLED
     description: "Enable write operations (block, toggle, restart)"
     default: "false"
@@ -116,5 +132,5 @@ conformance:
   required: "6/6"
   recommended: "3/3"
   optional: "2/2"
-  gated: "3/3"
-  last_tested: "2026-04-18"
+  gated: "6/6"
+  last_tested: "2026-06-04"

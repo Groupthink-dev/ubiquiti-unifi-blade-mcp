@@ -6,6 +6,7 @@ and session management. All methods are async — aiounifi is natively async.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import ssl
@@ -20,11 +21,16 @@ from ubiquiti_unifi_blade_mcp.models import ControllerConfig, parse_controllers
 
 logger = logging.getLogger(__name__)
 
+# Base path for the official UniFi Network Integration API (X-API-KEY auth).
+_INTEGRATION_BASE = "proxy/network/integration/v1"
+
 # Patterns to scrub from error messages
 _CREDENTIAL_PATTERNS = [
     re.compile(r"password[=:]\S+", re.IGNORECASE),
     re.compile(r"cookie[=:]\S+", re.IGNORECASE),
     re.compile(r"x-csrf-token[=:]\S+", re.IGNORECASE),
+    re.compile(r"x-api-key[=:]\s*\S+", re.IGNORECASE),
+    re.compile(r"api[_-]?key[=:]\s*\S+", re.IGNORECASE),
     re.compile(r"Bearer\s+\S+", re.IGNORECASE),
     re.compile(r"unifises=\S+", re.IGNORECASE),
     re.compile(r"TOKEN=\S+", re.IGNORECASE),
@@ -69,6 +75,8 @@ class UniFiClient:
         self._controllers: dict[str, Controller] = {}
         self._sessions: dict[str, aiohttp.ClientSession] = {}
         self._connected: set[str] = set()
+        # Cache of Integration-API site UUIDs (distinct from the short site name)
+        self._site_ids: dict[str, str] = {}
 
     @property
     def controller_names(self) -> list[str]:
@@ -83,6 +91,19 @@ class UniFiClient:
             raise UniFiError(f"Unknown controller: {name}. Available: {', '.join(self.controller_names)}")
         return config
 
+    @staticmethod
+    def _ssl_param(config: ControllerConfig) -> ssl.SSLContext | Literal[False]:
+        """Return an SSL context (verify) or ``False`` (skip — common on UDM)."""
+        if config.verify_ssl:
+            return ssl.create_default_context()
+        return False
+
+    def _ensure_session(self, name: str) -> aiohttp.ClientSession:
+        """Get or create the per-controller aiohttp session (shared by both auth modes)."""
+        if name not in self._sessions or self._sessions[name].closed:
+            self._sessions[name] = aiohttp.ClientSession()
+        return self._sessions[name]
+
     async def _get_controller(self, controller: str | None = None) -> Controller:
         """Get or create an aiounifi Controller for the given controller."""
         name = controller or self._configs[0].name
@@ -91,18 +112,24 @@ class UniFiClient:
 
         config = self._get_config(name)
 
+        # Session (cookie/CSRF) auth requires username + password. An api-key-only
+        # controller can still serve the network/VLAN tools (Integration API),
+        # but not the aiounifi-backed monitoring tools — fail with a clear hint.
+        if not (config.username and config.password):
+            raise UniFiError(
+                f"Controller '{name}' has no username/password — this tool requires "
+                "session auth. Only the network/VLAN tools work in API-key-only mode."
+            )
+
         # Create SSL context
-        ssl_context: ssl.SSLContext | Literal[False] = False
-        if config.verify_ssl:
-            ssl_context = ssl.create_default_context()
+        ssl_context = self._ssl_param(config)
 
         # Create aiohttp session
-        if name not in self._sessions or self._sessions[name].closed:
-            self._sessions[name] = aiohttp.ClientSession()
+        session = self._ensure_session(name)
 
         # Create aiounifi configuration
         unifi_config = Configuration(
-            session=self._sessions[name],
+            session=session,
             host=config.host,
             username=config.username,
             password=config.password,
@@ -537,3 +564,139 @@ class UniFiClient:
                 }
             )
         return sites
+
+    # ------------------------------------------------------------------
+    # Integration API (X-API-KEY) — networks / VLANs
+    # ------------------------------------------------------------------
+
+    async def _integration_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        controller: str | None = None,
+        json_body: dict[str, Any] | None = None,
+    ) -> Any:
+        """Make a request against the official UniFi Network Integration API.
+
+        Stateless: authenticates with ``X-API-KEY`` (no login/CSRF). Used by the
+        network/VLAN tools. Requires ``api_key`` on the target controller.
+        """
+        config = self._get_config(controller)
+        if not config.api_key:
+            raise UniFiError(
+                f"Controller '{config.name}' has no API key. Set UNIFI_API_KEY "
+                f"(or UNIFI_{config.name.upper()}_API_KEY) to use network/VLAN tools."
+            )
+
+        session = self._ensure_session(config.name)
+        url = f"https://{config.host}:{config.port}/{_INTEGRATION_BASE}/{path.lstrip('/')}"
+        headers = {"X-API-KEY": config.api_key, "Accept": "application/json"}
+        if json_body is not None:
+            headers["Content-Type"] = "application/json"
+
+        try:
+            async with session.request(
+                method.upper(),
+                url,
+                headers=headers,
+                json=json_body,
+                ssl=self._ssl_param(config),
+            ) as resp:
+                text = await resp.text()
+                if resp.status in (401, 403):
+                    raise AuthError(_scrub(f"Integration API auth failed ({resp.status}): {text}"))
+                if resp.status == 404:
+                    raise NotFoundError(_scrub(f"Integration API resource not found ({resp.status}): {text}"))
+                if resp.status >= 400:
+                    raise UniFiError(_scrub(f"Integration API error ({resp.status}): {text}"))
+                if not text:
+                    return None
+                try:
+                    return json.loads(text)
+                except json.JSONDecodeError as e:
+                    raise UniFiError(_scrub(f"Integration API returned non-JSON response: {e}")) from e
+        except aiohttp.ClientError as e:
+            raise ConnectionError(_scrub(f"Integration API request failed: {e}")) from e
+
+    async def _resolve_integration_site_id(self, controller: str | None = None) -> str:
+        """Resolve the Integration-API site UUID for the configured short site name.
+
+        The Integration API keys sites by UUID, not the legacy ``default`` slug.
+        Matches on ``name``; falls back to the sole site, else the first. Cached.
+        """
+        config = self._get_config(controller)
+        cached = self._site_ids.get(config.name)
+        if cached:
+            return cached
+
+        data = await self._integration_request("get", "sites", controller=controller)
+        items = data.get("data", []) if isinstance(data, dict) else (data or [])
+        if not items:
+            raise NotFoundError(f"No sites returned by the Integration API for controller '{config.name}'")
+
+        chosen = next(
+            (s for s in items if str(s.get("name", "")).lower() == config.site.lower()),
+            items[0],
+        )
+        site_id = str(chosen.get("id", ""))
+        if not site_id:
+            raise NotFoundError(f"Could not resolve a site id for controller '{config.name}'")
+        self._site_ids[config.name] = site_id
+        return site_id
+
+    @staticmethod
+    def _normalize_network(n: dict[str, Any]) -> dict[str, Any]:
+        """Normalize a network record across camelCase (Integration API) / snake_case (legacy)."""
+        return {
+            "id": n.get("id") or n.get("_id", ""),
+            "name": n.get("name", "?"),
+            "enabled": n.get("enabled", n.get("vlan_enabled", True)),
+            "vlan": n.get("vlanId", n.get("vlan")),
+            "purpose": n.get("purpose") or n.get("management") or "",
+            "subnet": n.get("ipSubnet") or n.get("ip_subnet") or n.get("subnet") or "",
+            "gateway": n.get("gatewayIp") or n.get("gateway") or "",
+        }
+
+    async def get_networks(self, controller: str | None = None) -> list[dict[str, Any]]:
+        """List configured networks / VLANs (Integration API)."""
+        site_id = await self._resolve_integration_site_id(controller)
+        data = await self._integration_request("get", f"sites/{site_id}/networks", controller=controller)
+        items = data.get("data", []) if isinstance(data, dict) else (data or [])
+        return [self._normalize_network(n) for n in items]
+
+    async def get_network(self, network_id: str, controller: str | None = None) -> dict[str, Any] | None:
+        """Get a single network / VLAN by id (Integration API)."""
+        site_id = await self._resolve_integration_site_id(controller)
+        data = await self._integration_request("get", f"sites/{site_id}/networks/{network_id}", controller=controller)
+        if not data:
+            return None
+        return self._normalize_network(data)
+
+    async def create_network(self, spec: dict[str, Any], controller: str | None = None) -> dict[str, Any]:
+        """Create a network / VLAN (Integration API). ``spec`` is the raw API body."""
+        site_id = await self._resolve_integration_site_id(controller)
+        data = await self._integration_request(
+            "post", f"sites/{site_id}/networks", controller=controller, json_body=spec
+        )
+        return self._normalize_network(data) if isinstance(data, dict) else {}
+
+    async def update_network(
+        self, network_id: str, patch: dict[str, Any], controller: str | None = None
+    ) -> dict[str, Any]:
+        """Update a network / VLAN (Integration API). Sends only the supplied fields.
+
+        NOTE (Phase 0): confirm whether the v10.4 ``PUT`` requires the full object
+        rather than a partial patch; if so, fetch-merge-PUT here.
+        """
+        site_id = await self._resolve_integration_site_id(controller)
+        data = await self._integration_request(
+            "put", f"sites/{site_id}/networks/{network_id}", controller=controller, json_body=patch
+        )
+        return self._normalize_network(data) if isinstance(data, dict) else {}
+
+    async def delete_network(self, network_id: str, controller: str | None = None) -> bool:
+        """Delete a network / VLAN by id (Integration API)."""
+        site_id = await self._resolve_integration_site_id(controller)
+        await self._integration_request("delete", f"sites/{site_id}/networks/{network_id}", controller=controller)
+        return True

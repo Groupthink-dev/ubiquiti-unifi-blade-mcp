@@ -15,7 +15,7 @@ UniFi controllers expose a rich but undocumented REST API behind cookie-based au
 
 | | ubiquiti-unifi-blade-mcp | sirkirby/unifi-mcp | enuno/unifi-mcp-server |
 |---|---|---|---|
-| **Focus** | Monitoring + security (18 tools) | Full management (161 tools) | Full management (74 tools) |
+| **Focus** | Monitoring + security + network/VLAN mgmt (23 tools) | Full management (161 tools) | Full management (74 tools) |
 | **Design for** | LLM agents (token-efficient) | Claude Code (lazy loading) | General MCP clients |
 | **Multi-controller** | Native (env var config) | Single controller | Multi-mode (local/cloud) |
 | **Write safety** | Dual-gated (env + confirm) | Preview-then-confirm | Permission model |
@@ -31,17 +31,30 @@ Use this blade-MCP for agent-driven monitoring and security. Use sirkirby/unifi-
 # Install
 uv pip install -e .
 
-# Configure
+# Configure (monitoring tools — username/password)
 export UNIFI_HOST="192.168.1.1"
 export UNIFI_USERNAME="admin"
 export UNIFI_PASSWORD="your-password"
 export UNIFI_VERIFY_SSL="false"  # Common for self-signed certs
 
+# Configure (network/VLAN tools — Integration API key)
+# Generate in UniFi Network → Settings → Control Plane → Integrations
+export UNIFI_API_KEY="your-x-api-key"
+
 # Run
 ubiquiti-unifi-blade-mcp
 ```
 
-## 18 tools, 5 categories
+## Authentication: two modes
+
+| Mode | Env | Drives | Endpoint |
+|------|-----|--------|----------|
+| **Session** | `UNIFI_USERNAME` + `UNIFI_PASSWORD` (+ optional `UNIFI_TOTP_SECRET`) | Monitoring/security tools (devices, clients, firewall, WLANs, DPI, …) | Legacy controller API via `aiounifi` (cookie/CSRF) |
+| **API key** | `UNIFI_API_KEY` (`X-API-KEY`) | Network/VLAN tools (`unifi_networks`, `unifi_create_network`, …) | Official **Integration API** (`/proxy/network/integration/v1`) — stateless |
+
+Either or both may be set. The network/VLAN tools require the API key (the only path that supports VLAN writes); the monitoring tools require username/password. Generate the API key in UniFi Network → **Settings → Control Plane → Integrations**. Requires UniFi Network 9.0+ (network/VLAN CRUD confirmed on 10.x).
+
+## 23 tools, 6 categories
 
 ### Info & Sites (2 tools)
 
@@ -49,6 +62,13 @@ ubiquiti-unifi-blade-mcp
 |------|---------|------------|
 | `unifi_info` | Health check — controller version, hostname, device/client counts, write gate | ~60 |
 | `unifi_sites` | List sites on the controller | ~20/site |
+
+### Networks & VLANs (2 read tools — require `UNIFI_API_KEY`)
+
+| Tool | Purpose | Token cost |
+|------|---------|------------|
+| `unifi_networks` | List networks/VLANs — name, VLAN id, enabled, purpose, subnet | ~25/network |
+| `unifi_network` | Full detail — VLAN id, subnet, gateway, purpose | ~60 |
 
 ### Devices (2 tools)
 
@@ -74,7 +94,7 @@ ubiquiti-unifi-blade-mcp
 | `unifi_port_forwards` | Port forwards — name, protocol, external → internal | ~30/fwd |
 | `unifi_dpi` | DPI restriction groups and apps | ~20/item |
 
-### Write Operations (7 tools, gated)
+### Write Operations (10 tools, gated)
 
 | Tool | Gate | Purpose |
 |------|------|---------|
@@ -84,6 +104,9 @@ ubiquiti-unifi-blade-mcp
 | `unifi_toggle_wlan` | write | Enable or disable an SSID |
 | `unifi_toggle_traffic_route` | write | Enable or disable a traffic route |
 | `unifi_restart_device` | write + confirm | Restart an AP, switch, or gateway |
+| `unifi_create_network` | write + confirm + API key | Create a network/VLAN |
+| `unifi_update_network` | write + confirm + API key | Update a network/VLAN (supplied fields) |
+| `unifi_delete_network` | write + confirm + API key | Delete a network/VLAN |
 
 ### Output format
 
@@ -118,9 +141,10 @@ Pass `controller="office"` to any tool. Omit for the first configured controller
 | Layer | Mechanism |
 |-------|-----------|
 | **Write gate** | `UNIFI_WRITE_ENABLED=true` required for any mutation |
-| **Destructive confirm** | `unifi_block_client` and `unifi_restart_device` require `confirm=true` |
-| **Credential scrubbing** | Passwords, cookies, CSRF tokens, session IDs stripped from errors |
-| **Bearer auth** | Optional `UNIFI_MCP_API_TOKEN` for HTTP transport |
+| **Destructive confirm** | `unifi_block_client`, `unifi_restart_device`, and all `unifi_*_network` write tools require `confirm=true` |
+| **Credential scrubbing** | Passwords, cookies, CSRF tokens, `X-API-KEY`, session IDs stripped from errors |
+| **Controller API key** | `UNIFI_API_KEY` (`X-API-KEY`) — scoped Integration API key for network/VLAN tools |
+| **HTTP transport auth** | `UNIFI_MCP_API_TOKEN` bearer token; HTTP transport **refuses to start** without it (loopback-only, stdio is the default) |
 | **Session isolation** | Each controller authenticates independently |
 | **SSL configurable** | `UNIFI_VERIFY_SSL=true` for environments with proper certs |
 | **2FA support** | TOTP via `UNIFI_TOTP_SECRET` (base32 encoded) |
@@ -166,10 +190,10 @@ make run            # Start MCP server (stdio)
 
 ```
 src/ubiquiti_unifi_blade_mcp/
-├── server.py       — FastMCP 2.0 server, 18 @mcp.tool decorators
-├── client.py       — UniFiClient with multi-controller, credential scrubbing, session management
+├── server.py       — FastMCP server, 23 @mcp.tool decorators
+├── client.py       — UniFiClient: aiounifi session auth + Integration API (X-API-KEY) layer, multi-controller, credential scrubbing
 ├── formatters.py   — Token-efficient output (pipe-delimited, null omission, human units)
-├── models.py       — Controller config, write gate, constants
+├── models.py       — Controller config, auth modes, write gate, network payload builder
 └── auth.py         — Bearer token middleware for HTTP transport
 ```
 

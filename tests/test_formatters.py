@@ -14,6 +14,8 @@ from ubiquiti_unifi_blade_mcp.formatters import (
     format_dpi,
     format_firewall_policies,
     format_info,
+    format_network_detail,
+    format_network_list,
     format_port_forwards,
     format_sites,
     format_traffic_routes,
@@ -153,6 +155,31 @@ class TestWlanFormatters:
 
     def test_wlan_list_empty(self) -> None:
         assert format_wlan_list([]) == "(no WLANs)"
+
+
+class TestNetworkFormatters:
+    def test_network_list(self, sample_networks: list[dict[str, Any]]) -> None:
+        result = format_network_list(sample_networks)
+        assert "Management" in result
+        assert "vlan=1" in result
+        assert "DISABLED" in result  # Guest is disabled
+        assert "subnet=10.1.1.254/24" in result
+        assert "id=n1" in result
+
+    def test_network_list_empty(self) -> None:
+        assert format_network_list([]) == "(no networks)"
+
+    def test_network_detail(self, sample_networks: list[dict[str, Any]]) -> None:
+        result = format_network_detail(sample_networks[0])
+        assert "Name: Management" in result
+        assert "VLAN: 1" in result
+        assert "Subnet: 10.1.1.254/24" in result
+        assert "Gateway: 10.1.1.254" in result
+        assert "ID: n1" in result
+
+    def test_network_detail_vlan_zero(self) -> None:
+        result = format_network_detail({"id": "n0", "name": "Default", "vlan": 0, "enabled": True})
+        assert "VLAN: 0" in result
 
 
 class TestFirewallFormatters:
