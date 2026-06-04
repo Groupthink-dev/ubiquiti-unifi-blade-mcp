@@ -17,6 +17,8 @@ from ubiquiti_unifi_blade_mcp.formatters import (
     format_network_detail,
     format_network_list,
     format_port_forwards,
+    format_resource_detail,
+    format_resource_list,
     format_sites,
     format_traffic_routes,
     format_traffic_rules,
@@ -180,6 +182,37 @@ class TestNetworkFormatters:
     def test_network_detail_vlan_zero(self) -> None:
         result = format_network_detail({"id": "n0", "name": "Default", "vlan": 0, "enabled": True})
         assert "VLAN: 0" in result
+
+
+class TestResourceFormatters:
+    def test_resource_list(self) -> None:
+        items = [
+            {"id": "p1", "name": "Block IoT→LAN", "action": "BLOCK", "enabled": True},
+            {"id": "p2", "name": "Allow DNS", "action": "ALLOW", "enabled": False},
+        ]
+        result = format_resource_list(items, "firewall_policies")
+        assert "Block IoT→LAN" in result
+        assert "action=BLOCK" in result
+        assert "DISABLED" in result
+        assert "id=p1" in result
+
+    def test_resource_list_empty(self) -> None:
+        assert format_resource_list([], "vouchers") == "(no vouchers)"
+
+    def test_resource_list_label_fallback(self) -> None:
+        # No name/ssid/domain → falls back to id as the label, not duplicated.
+        result = format_resource_list([{"id": "x1", "type": "IPV4"}], "acl_rules")
+        assert result == "x1 | type=IPV4"
+
+    def test_resource_detail(self) -> None:
+        item = {"id": "p1", "name": "P", "source": {"zoneId": "z1"}, "enabled": True}
+        result = format_resource_detail(item)
+        assert "id: p1" in result
+        assert "name: P" in result
+        assert '"zoneId":"z1"' in result  # nested rendered as compact JSON
+
+    def test_resource_detail_not_found(self) -> None:
+        assert format_resource_detail(None) == "(not found)"
 
 
 class TestFirewallFormatters:

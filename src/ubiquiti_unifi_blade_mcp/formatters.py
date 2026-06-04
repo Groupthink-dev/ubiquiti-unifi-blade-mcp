@@ -9,6 +9,7 @@ All formatters return compact strings optimised for LLM consumption:
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 
@@ -292,6 +293,49 @@ def format_network_detail(net: dict[str, Any]) -> str:
     if gateway:
         lines.append(f"Gateway: {gateway}")
     lines.append(f"ID: {net.get('id', '?')}")
+    return "\n".join(lines)
+
+
+# ------------------------------------------------------------------
+# Generic Integration-API resources (wifi, firewall, acl, dns, vouchers, …)
+# ------------------------------------------------------------------
+
+# Field probed (in order) for the leading label of a generic resource line.
+_RESOURCE_LABEL_KEYS = ("name", "ssid", "domain", "displayName", "description")
+# Compact summary fields appended as key=value when present.
+_RESOURCE_SUMMARY_KEYS = ("type", "action", "vlanId", "vlan", "purpose", "management")
+
+
+def format_resource_list(items: list[dict[str, Any]], resource: str = "") -> str:
+    """Generic compact formatter for an Integration-API resource list."""
+    if not items:
+        return f"(no {resource or 'items'})"
+    lines = []
+    for it in items:
+        label = next((str(it[k]) for k in _RESOURCE_LABEL_KEYS if it.get(k)), None)
+        parts = [label or str(it.get("id") or it.get("_id") or "?")]
+        for k in _RESOURCE_SUMMARY_KEYS:
+            v = it.get(k)
+            if v not in (None, ""):
+                parts.append(f"{k}={v}")
+        if "enabled" in it:
+            parts.append("enabled" if it.get("enabled") else "DISABLED")
+        iid = it.get("id") or it.get("_id")
+        if iid and label:  # avoid printing id twice when it was used as the label
+            parts.append(f"id={iid}")
+        lines.append(" | ".join(parts))
+    return "\n".join(lines)
+
+
+def format_resource_detail(item: dict[str, Any] | None) -> str:
+    """Generic detail formatter — one ``key: value`` per line (nested values as compact JSON)."""
+    if not item:
+        return "(not found)"
+    lines = []
+    for k, v in item.items():
+        if isinstance(v, (dict, list)):
+            v = json.dumps(v, separators=(",", ":"))
+        lines.append(f"{k}: {v}")
     return "\n".join(lines)
 
 

@@ -24,6 +24,28 @@ logger = logging.getLogger(__name__)
 # Base path for the official UniFi Network Integration API (X-API-KEY auth).
 _INTEGRATION_BASE = "proxy/network/integration/v1"
 
+# Logical resource name -> (path under sites/{siteId}/, read_only) for the Integration API.
+# Paths verified against the Art-of-WiFi v10 client + UniFi developer docs (Network 10.1.84
+# baseline; segments unchanged through 10.4.x per research, but confirm against the on-console
+# OpenAPI at Settings → Control Plane → Integrations before relying on a write tool).
+# Resources NOT in the official Integration API (port forwards, traffic routes/rules, QoS) are
+# intentionally absent — those remain on the legacy aiounifi read tools.
+_INTEGRATION_RESOURCES: dict[str, tuple[str, bool]] = {
+    "networks": ("networks", False),
+    "wifi": ("wifi/broadcasts", False),
+    "firewall_policies": ("firewall/policies", False),
+    "firewall_zones": ("firewall/zones", False),
+    "acl_rules": ("acl-rules", False),
+    "dns_policies": ("dns/policies", False),
+    "traffic_matching_lists": ("traffic-matching-lists", False),
+    "vouchers": ("hotspot/vouchers", False),
+    "wan_interfaces": ("wans", True),
+    "radius_profiles": ("radius/profiles", True),
+    "vpn_servers": ("vpn/servers", True),
+    "vpn_tunnels": ("vpn/site-to-site-tunnels", True),
+    "device_tags": ("device-tags", True),
+}
+
 # Patterns to scrub from error messages
 _CREDENTIAL_PATTERNS = [
     re.compile(r"password[=:]\S+", re.IGNORECASE),
@@ -566,7 +588,7 @@ class UniFiClient:
         return sites
 
     # ------------------------------------------------------------------
-    # Integration API (X-API-KEY) — networks / VLANs
+    # Integration API (X-API-KEY) — networks / VLANs + generic resources
     # ------------------------------------------------------------------
 
     async def _integration_request(
@@ -646,6 +668,65 @@ class UniFiClient:
         return site_id
 
     @staticmethod
+    def _resource_path(resource: str) -> tuple[str, bool]:
+        """Resolve a logical resource name to its (path, read_only) Integration-API entry."""
+        entry = _INTEGRATION_RESOURCES.get(resource)
+        if entry is None:
+            raise UniFiError(
+                f"Unknown Integration-API resource '{resource}'. Available: {', '.join(sorted(_INTEGRATION_RESOURCES))}"
+            )
+        return entry
+
+    async def integration_list(self, resource: str, controller: str | None = None) -> list[dict[str, Any]]:
+        """List items of an Integration-API resource (unwraps the paginated ``data`` envelope)."""
+        path, _ = self._resource_path(resource)
+        site_id = await self._resolve_integration_site_id(controller)
+        data = await self._integration_request("get", f"sites/{site_id}/{path}", controller=controller)
+        return data.get("data", []) if isinstance(data, dict) else (data or [])
+
+    async def integration_get(
+        self, resource: str, item_id: str, controller: str | None = None
+    ) -> dict[str, Any] | None:
+        """Get a single Integration-API resource item by id (returned object has no ``data`` wrapper)."""
+        path, _ = self._resource_path(resource)
+        site_id = await self._resolve_integration_site_id(controller)
+        data = await self._integration_request("get", f"sites/{site_id}/{path}/{item_id}", controller=controller)
+        return data if isinstance(data, dict) else None
+
+    async def integration_create(
+        self, resource: str, body: dict[str, Any], controller: str | None = None
+    ) -> dict[str, Any]:
+        """Create an Integration-API resource item. ``body`` is the raw API payload."""
+        path, read_only = self._resource_path(resource)
+        if read_only:
+            raise UniFiError(f"Resource '{resource}' is read-only — create is not supported.")
+        site_id = await self._resolve_integration_site_id(controller)
+        data = await self._integration_request("post", f"sites/{site_id}/{path}", controller=controller, json_body=body)
+        return data if isinstance(data, dict) else {}
+
+    async def integration_update(
+        self, resource: str, item_id: str, body: dict[str, Any], controller: str | None = None
+    ) -> dict[str, Any]:
+        """Update (PUT) an Integration-API resource item with the supplied body."""
+        path, read_only = self._resource_path(resource)
+        if read_only:
+            raise UniFiError(f"Resource '{resource}' is read-only — update is not supported.")
+        site_id = await self._resolve_integration_site_id(controller)
+        data = await self._integration_request(
+            "put", f"sites/{site_id}/{path}/{item_id}", controller=controller, json_body=body
+        )
+        return data if isinstance(data, dict) else {}
+
+    async def integration_delete(self, resource: str, item_id: str, controller: str | None = None) -> bool:
+        """Delete an Integration-API resource item by id."""
+        path, read_only = self._resource_path(resource)
+        if read_only:
+            raise UniFiError(f"Resource '{resource}' is read-only — delete is not supported.")
+        site_id = await self._resolve_integration_site_id(controller)
+        await self._integration_request("delete", f"sites/{site_id}/{path}/{item_id}", controller=controller)
+        return True
+
+    @staticmethod
     def _normalize_network(n: dict[str, Any]) -> dict[str, Any]:
         """Normalize a network record across camelCase (Integration API) / snake_case (legacy)."""
         return {
@@ -658,28 +739,23 @@ class UniFiClient:
             "gateway": n.get("gatewayIp") or n.get("gateway") or "",
         }
 
+    # Dedicated network/VLAN methods — ergonomic typed surface over the generic
+    # resource layer (the primary use case; benefits from field normalization).
+
     async def get_networks(self, controller: str | None = None) -> list[dict[str, Any]]:
         """List configured networks / VLANs (Integration API)."""
-        site_id = await self._resolve_integration_site_id(controller)
-        data = await self._integration_request("get", f"sites/{site_id}/networks", controller=controller)
-        items = data.get("data", []) if isinstance(data, dict) else (data or [])
+        items = await self.integration_list("networks", controller)
         return [self._normalize_network(n) for n in items]
 
     async def get_network(self, network_id: str, controller: str | None = None) -> dict[str, Any] | None:
         """Get a single network / VLAN by id (Integration API)."""
-        site_id = await self._resolve_integration_site_id(controller)
-        data = await self._integration_request("get", f"sites/{site_id}/networks/{network_id}", controller=controller)
-        if not data:
-            return None
-        return self._normalize_network(data)
+        data = await self.integration_get("networks", network_id, controller)
+        return self._normalize_network(data) if data else None
 
     async def create_network(self, spec: dict[str, Any], controller: str | None = None) -> dict[str, Any]:
         """Create a network / VLAN (Integration API). ``spec`` is the raw API body."""
-        site_id = await self._resolve_integration_site_id(controller)
-        data = await self._integration_request(
-            "post", f"sites/{site_id}/networks", controller=controller, json_body=spec
-        )
-        return self._normalize_network(data) if isinstance(data, dict) else {}
+        data = await self.integration_create("networks", spec, controller)
+        return self._normalize_network(data) if data else {}
 
     async def update_network(
         self, network_id: str, patch: dict[str, Any], controller: str | None = None
@@ -689,14 +765,9 @@ class UniFiClient:
         NOTE (Phase 0): confirm whether the v10.4 ``PUT`` requires the full object
         rather than a partial patch; if so, fetch-merge-PUT here.
         """
-        site_id = await self._resolve_integration_site_id(controller)
-        data = await self._integration_request(
-            "put", f"sites/{site_id}/networks/{network_id}", controller=controller, json_body=patch
-        )
-        return self._normalize_network(data) if isinstance(data, dict) else {}
+        data = await self.integration_update("networks", network_id, patch, controller)
+        return self._normalize_network(data) if data else {}
 
     async def delete_network(self, network_id: str, controller: str | None = None) -> bool:
         """Delete a network / VLAN by id (Integration API)."""
-        site_id = await self._resolve_integration_site_id(controller)
-        await self._integration_request("delete", f"sites/{site_id}/networks/{network_id}", controller=controller)
-        return True
+        return await self.integration_delete("networks", network_id, controller)

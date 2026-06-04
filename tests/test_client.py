@@ -134,3 +134,48 @@ class TestNetworkClient:
         client = UniFiClient()
         with pytest.raises(UniFiError, match="session auth"):
             await client._get_controller()
+
+
+class TestGenericIntegrationResources:
+    async def test_list_path_and_unwrap(self, mock_env_apikey: None, mocker: MockerFixture) -> None:
+        client = UniFiClient()
+        mocker.patch.object(client, "_resolve_integration_site_id", return_value="S")
+        req = mocker.patch.object(
+            client, "_integration_request", return_value={"data": [{"id": "w1", "name": "Guest WiFi"}]}
+        )
+        items = await client.integration_list("wifi")
+        req.assert_awaited_once_with("get", "sites/S/wifi/broadcasts", controller=None)
+        assert items[0]["name"] == "Guest WiFi"
+
+    async def test_get_path(self, mock_env_apikey: None, mocker: MockerFixture) -> None:
+        client = UniFiClient()
+        mocker.patch.object(client, "_resolve_integration_site_id", return_value="S")
+        req = mocker.patch.object(client, "_integration_request", return_value={"id": "d1", "domain": "x"})
+        item = await client.integration_get("dns_policies", "d1")
+        req.assert_awaited_once_with("get", "sites/S/dns/policies/d1", controller=None)
+        assert item["domain"] == "x"  # type: ignore[index]
+
+    async def test_create_path_and_body(self, mock_env_apikey: None, mocker: MockerFixture) -> None:
+        client = UniFiClient()
+        mocker.patch.object(client, "_resolve_integration_site_id", return_value="S")
+        req = mocker.patch.object(client, "_integration_request", return_value={"id": "p1"})
+        body = {"name": "Block IoT", "action": "BLOCK"}
+        await client.integration_create("firewall_policies", body)
+        req.assert_awaited_once_with("post", "sites/S/firewall/policies", controller=None, json_body=body)
+
+    async def test_delete_path(self, mock_env_apikey: None, mocker: MockerFixture) -> None:
+        client = UniFiClient()
+        mocker.patch.object(client, "_resolve_integration_site_id", return_value="S")
+        req = mocker.patch.object(client, "_integration_request", return_value=None)
+        assert await client.integration_delete("acl_rules", "r1") is True
+        req.assert_awaited_once_with("delete", "sites/S/acl-rules/r1", controller=None)
+
+    async def test_read_only_rejects_write(self, mock_env_apikey: None) -> None:
+        client = UniFiClient()
+        with pytest.raises(UniFiError, match="read-only"):
+            await client.integration_create("wan_interfaces", {"x": 1})
+
+    async def test_unknown_resource_rejected(self, mock_env_apikey: None) -> None:
+        client = UniFiClient()
+        with pytest.raises(UniFiError, match="Unknown Integration-API resource"):
+            await client.integration_list("bogus")

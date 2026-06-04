@@ -1,14 +1,14 @@
 # ubiquiti-unifi-blade-mcp
 
-UniFi network monitoring, security, and network/VLAN management MCP. 23 tools, token-efficient output, multi-controller.
+UniFi monitoring, security, and Integration-API resource management MCP. 28 tools, token-efficient output, multi-controller.
 
 ## Architecture
 
 ```
 src/ubiquiti_unifi_blade_mcp/
-├── server.py       — FastMCP 3.x server, 23 @mcp.tool decorators
-├── client.py       — UniFiClient: aiounifi session auth + Integration API (X-API-KEY) layer, multi-controller, credential scrubbing
-├── formatters.py   — Token-efficient output (pipe-delimited, null omission, human units)
+├── server.py       — FastMCP 3.x server, 28 @mcp.tool decorators
+├── client.py       — UniFiClient: aiounifi session auth + Integration API (X-API-KEY) generic resource layer, multi-controller, credential scrubbing
+├── formatters.py   — Token-efficient output (pipe-delimited, null omission, human units) + generic resource formatters
 ├── models.py       — ControllerConfig (auth_mode), write gate, parse_controllers(), network_spec_from_args()
 └── auth.py         — BearerAuthMiddleware for HTTP transport
 ```
@@ -25,7 +25,9 @@ make run            # Start MCP server (stdio)
 ## Key patterns
 
 - **Two auth modes** — `ControllerConfig.auth_mode`: `session` (username/password → aiounifi, cookie/CSRF) drives the monitoring tools; `apikey` (`UNIFI_API_KEY` → `X-API-KEY`) drives the network/VLAN tools. A controller is valid with either; both may be set.
-- **Integration API layer** — network/VLAN tools use `_integration_request()` (a raw aiohttp call to `/proxy/network/integration/v1/...`), NOT aiounifi (which has no network handlers and can't inject the `X-API-KEY` header). Site IDs there are UUIDs → `_resolve_integration_site_id()` (cached).
+- **Integration API layer** — network/VLAN tools + generic resource tools use `_integration_request()` (a raw aiohttp call to `/proxy/network/integration/v1/...`), NOT aiounifi (which has no network handlers and can't inject the `X-API-KEY` header). Site IDs there are UUIDs → `_resolve_integration_site_id()` (cached). List responses are paginated `{offset,limit,count,totalCount,data:[]}`; GET-by-id returns the bare object.
+- **Generic resource layer** — `integration_list/get/create/update/delete(resource, …)` + the `_INTEGRATION_RESOURCES` map (logical name → `(path, read_only)`) are the single place resource paths live. Exposed via 5 `unifi_resource_*` tools (resource enum `ResourceName` in server.py). Paths are source-verified (Art-of-WiFi v10 client): `wifi/broadcasts`, `firewall/policies`, `firewall/zones`, `acl-rules`, `dns/policies`, `hotspot/vouchers`, `traffic-matching-lists` — NOT the camelCase you'd guess. Add/correct a resource in ONE place (the map).
+- **Not in the Integration API** — port forwards, traffic routes/rules, QoS, port profiles are absent from the official API; they stay on the legacy aiounifi read tools. Don't add them to `_INTEGRATION_RESOURCES`.
 - **networkconf is cookie-only** — the legacy private `/api/s/{site}/rest/networkconf` endpoint does NOT honor `X-API-KEY`; the Integration API `networks` resource is the X-API-KEY write path (Network 10.x).
 - **Network payload schema** — `network_spec_from_args()` in `models.py` is the single adjustment point for the create payload; confirm exact routed/corporate-VLAN field names against the on-console schema (Phase 0) and update only there.
 - **aiounifi is async** — no `asyncio.to_thread` needed, unlike sync-wrapped MCPs

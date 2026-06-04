@@ -15,7 +15,7 @@ UniFi controllers expose a rich but undocumented REST API behind cookie-based au
 
 | | ubiquiti-unifi-blade-mcp | sirkirby/unifi-mcp | enuno/unifi-mcp-server |
 |---|---|---|---|
-| **Focus** | Monitoring + security + network/VLAN mgmt (23 tools) | Full management (161 tools) | Full management (74 tools) |
+| **Focus** | Monitoring + security + Integration-API resource mgmt (28 tools) | Full management (161 tools) | Full management (74 tools) |
 | **Design for** | LLM agents (token-efficient) | Claude Code (lazy loading) | General MCP clients |
 | **Multi-controller** | Native (env var config) | Single controller | Multi-mode (local/cloud) |
 | **Write safety** | Dual-gated (env + confirm) | Preview-then-confirm | Permission model |
@@ -47,14 +47,36 @@ ubiquiti-unifi-blade-mcp
 
 ## Authentication: two modes
 
-| Mode | Env | Drives | Endpoint |
-|------|-----|--------|----------|
-| **Session** | `UNIFI_USERNAME` + `UNIFI_PASSWORD` (+ optional `UNIFI_TOTP_SECRET`) | Monitoring/security tools (devices, clients, firewall, WLANs, DPI, …) | Legacy controller API via `aiounifi` (cookie/CSRF) |
-| **API key** | `UNIFI_API_KEY` (`X-API-KEY`) | Network/VLAN tools (`unifi_networks`, `unifi_create_network`, …) | Official **Integration API** (`/proxy/network/integration/v1`) — stateless |
+| Mode | Env | Drives | Endpoint | Support status |
+|------|-----|--------|----------|----------------|
+| **API key** | `UNIFI_API_KEY` (`X-API-KEY`) | Networks/VLANs + all `unifi_resource_*` tools (WiFi, firewall, ACL, DNS, vouchers, …) | Official **Integration API** (`/proxy/network/integration/v1`) — stateless | ✅ **Official & supported** by Ubiquiti |
+| **Session** | `UNIFI_USERNAME` + `UNIFI_PASSWORD` (+ optional `UNIFI_TOTP_SECRET`) | Monitoring/security read tools (devices, clients, firewall view, WLANs, DPI, traffic, port forwards) | Legacy private controller API via `aiounifi` (cookie/CSRF) | ⚠️ **Unofficial / unsupported** |
 
-Either or both may be set. The network/VLAN tools require the API key (the only path that supports VLAN writes); the monitoring tools require username/password. Generate the API key in UniFi Network → **Settings → Control Plane → Integrations**. Requires UniFi Network 9.0+ (network/VLAN CRUD confirmed on 10.x).
+Either or both may be set. The Integration-API tools require the API key (the only path that supports writes); the monitoring read tools require username/password.
 
-## 23 tools, 6 categories
+> ### ⚠️ The session-mode (monitoring) tools use an UNOFFICIAL API
+>
+> The `aiounifi`-backed monitoring tools talk to UniFi's **private, undocumented controller API** (`/api/s/{site}/...`). Ubiquiti does **not** support, document, or guarantee this surface — it can change or break **without notice across firmware updates** (UniFi Network majors have repeatedly altered it). It works today via the community `aiounifi` library (which also powers Home Assistant), but treat these tools as best-effort.
+>
+> The **official, supported** path is the **Integration API** (`X-API-KEY`). Everything reachable through `unifi_networks` / `unifi_network` / the `unifi_resource_*` tools rides that surface. **Prefer API-key mode** wherever a capability exists on both. As Ubiquiti expands the Integration API, the unofficial session tools should be migrated onto it and eventually retired.
+
+### Generating an API key
+
+The API key is generated **on the UniFi console UI** (not via this MCP). Ubiquiti relabels the Settings tree fairly often, so the exact wording drifts between releases.
+
+**As of UniFi Network 10.4 (June 2026):**
+
+1. Open the UniFi Network application (the local console UI at `https://<controller-ip>`, or via `unifi.ui.com` → your console).
+2. **Settings** (gear icon) → **Control Plane** → **Integrations**.
+   *(On some 10.x builds this appears as Settings → **System** → **Integrations**, or **Admins & Users** → **API Keys** — if "Control Plane" isn't present, look for "Integrations" or "API" anywhere under Settings → System.)*
+3. Click **Create API Key**, give it a name (e.g. `blade-mcp`), and **copy the key immediately** — it is shown **only once**.
+4. The key is account- and site-scoped; store it in your secrets manager and set it as `UNIFI_API_KEY`.
+
+> **Verify scope before relying on writes:** the key inherits your admin role. A read-only/viewer admin yields a key that will `403` on create/update/delete. Use a Full-Management / Super Admin account if you need VLAN/firewall writes.
+>
+> **If the menu doesn't match:** open the console's built-in API reference (linked from the Integrations page) — it always reflects *your* installed version, and is the authoritative source when this doc has aged. Requires UniFi Network **9.0+** (full network/VLAN/firewall CRUD confirmed on **10.x**).
+
+## 28 tools, 7 categories
 
 ### Info & Sites (2 tools)
 
@@ -70,21 +92,23 @@ Either or both may be set. The network/VLAN tools require the API key (the only 
 | `unifi_networks` | List networks/VLANs — name, VLAN id, enabled, purpose, subnet | ~25/network |
 | `unifi_network` | Full detail — VLAN id, subnet, gateway, purpose | ~60 |
 
-### Devices (2 tools)
+### Devices (2 tools) — ⚠️ unofficial API
 
 | Tool | Purpose | Token cost |
 |------|---------|------------|
 | `unifi_devices` | List APs, switches, gateways — model, state, clients, uptime, firmware | ~50/device |
 | `unifi_device` | Full detail — port table with PoE, firmware, upgrade status | ~150 |
 
-### Clients (2 tools)
+### Clients (2 tools) — ⚠️ unofficial API
 
 | Tool | Purpose | Token cost |
 |------|---------|------------|
 | `unifi_clients` | Connected clients — name, IP, SSID, signal, experience, blocked | ~40/client |
 | `unifi_client` | Full detail — TX/RX, vendor (OUI), AP association | ~120 |
 
-### Firewall & Security (5 tools)
+### Firewall & Security (5 tools) — ⚠️ unofficial API (read-only)
+
+These read views ride the **unofficial** private API (see the auth warning above). For *managed* firewall, use the official `unifi_resource_*` tools with `firewall_policies` / `firewall_zones` / `acl_rules`.
 
 | Tool | Purpose | Token cost |
 |------|---------|------------|
@@ -96,17 +120,51 @@ Either or both may be set. The network/VLAN tools require the API key (the only 
 
 ### Write Operations (10 tools, gated)
 
+The first six ride the **unofficial** private API (⚠️); the three `*_network` tools use the **official** Integration API (✅).
+
+| Tool | Gate | API | Purpose |
+|------|------|-----|---------|
+| `unifi_block_client` | write + confirm | ⚠️ unofficial | Block a client from the network |
+| `unifi_unblock_client` | write | ⚠️ unofficial | Unblock a previously blocked client |
+| `unifi_reconnect_client` | write | ⚠️ unofficial | Force a wireless client to reconnect |
+| `unifi_toggle_wlan` | write | ⚠️ unofficial | Enable or disable an SSID |
+| `unifi_toggle_traffic_route` | write | ⚠️ unofficial | Enable or disable a traffic route |
+| `unifi_restart_device` | write + confirm | ⚠️ unofficial | Restart an AP, switch, or gateway |
+| `unifi_create_network` | write + confirm + API key | ✅ official | Create a network/VLAN |
+| `unifi_update_network` | write + confirm + API key | ✅ official | Update a network/VLAN (supplied fields) |
+| `unifi_delete_network` | write + confirm + API key | ✅ official | Delete a network/VLAN |
+
+### Integration-API resources (5 generic tools — require `UNIFI_API_KEY`)
+
+Beyond the dedicated network tools, a generic CRUD surface covers the rest of the official UniFi **Integration API** resources. Writes take a raw JSON `body` per the on-console schema; reads/lists work for all.
+
 | Tool | Gate | Purpose |
 |------|------|---------|
-| `unifi_block_client` | write + confirm | Block a client from the network |
-| `unifi_unblock_client` | write | Unblock a previously blocked client |
-| `unifi_reconnect_client` | write | Force a wireless client to reconnect |
-| `unifi_toggle_wlan` | write | Enable or disable an SSID |
-| `unifi_toggle_traffic_route` | write | Enable or disable a traffic route |
-| `unifi_restart_device` | write + confirm | Restart an AP, switch, or gateway |
-| `unifi_create_network` | write + confirm + API key | Create a network/VLAN |
-| `unifi_update_network` | write + confirm + API key | Update a network/VLAN (supplied fields) |
-| `unifi_delete_network` | write + confirm + API key | Delete a network/VLAN |
+| `unifi_resource_list` | API key | List items of any resource below |
+| `unifi_resource_get` | API key | Full detail for one item |
+| `unifi_resource_create` | write + confirm + API key | Create an item (raw `body`) |
+| `unifi_resource_update` | write + confirm + API key | Update (PUT) an item (raw `body`) |
+| `unifi_resource_delete` | write + confirm + API key | Delete an item |
+
+**`resource` values** → Integration-API path:
+
+| Resource | Path (`/proxy/network/integration/v1/sites/{id}/…`) | Writable |
+|----------|------|:---:|
+| `networks` | `networks` | ✅ |
+| `wifi` | `wifi/broadcasts` | ✅ |
+| `firewall_policies` | `firewall/policies` | ✅ |
+| `firewall_zones` | `firewall/zones` | ✅ |
+| `acl_rules` | `acl-rules` | ✅ |
+| `dns_policies` | `dns/policies` | ✅ |
+| `traffic_matching_lists` | `traffic-matching-lists` | ✅ |
+| `vouchers` | `hotspot/vouchers` | ✅ |
+| `wan_interfaces` | `wans` | read-only |
+| `radius_profiles` | `radius/profiles` | read-only |
+| `vpn_servers` | `vpn/servers` | read-only |
+| `vpn_tunnels` | `vpn/site-to-site-tunnels` | read-only |
+| `device_tags` | `device-tags` | read-only |
+
+> Paths verified against the Art-of-WiFi v10 client + UniFi developer docs (Network 10.1.84 baseline). Port forwards, traffic routes/rules, and QoS are **not** in the official Integration API — those stay on the legacy read tools (`unifi_port_forwards`, `unifi_traffic_routes`, `unifi_traffic_rules`). Confirm exact write payloads against **Settings → Control Plane → Integrations** on your console.
 
 ### Output format
 
@@ -190,8 +248,8 @@ make run            # Start MCP server (stdio)
 
 ```
 src/ubiquiti_unifi_blade_mcp/
-├── server.py       — FastMCP server, 23 @mcp.tool decorators
-├── client.py       — UniFiClient: aiounifi session auth + Integration API (X-API-KEY) layer, multi-controller, credential scrubbing
+├── server.py       — FastMCP server, 28 @mcp.tool decorators
+├── client.py       — UniFiClient: aiounifi session auth + Integration API (X-API-KEY) generic resource layer, multi-controller, credential scrubbing
 ├── formatters.py   — Token-efficient output (pipe-delimited, null omission, human units)
 ├── models.py       — Controller config, auth modes, write gate, network payload builder
 └── auth.py         — Bearer token middleware for HTTP transport

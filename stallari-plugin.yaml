@@ -1,6 +1,6 @@
 name: ubiquiti-unifi-blade-mcp
-version: "0.3.0"
-description: "Ubiquiti UniFi network monitoring, security, and network/VLAN management — device health, client visibility, firewall policies, traffic routes, DPI restrictions, port forwards, and network/VLAN CRUD via the Integration API"
+version: "0.4.0"
+description: "Ubiquiti UniFi monitoring, security, and Integration-API resource management — device/client/firewall visibility plus CRUD for networks/VLANs, WiFi, firewall policies/zones, ACL rules, DNS policies, traffic-matching lists, and vouchers via the official Integration API"
 author: groupthink-dev
 license: MIT
 tier: certified
@@ -35,6 +35,11 @@ services:
     create_network: unifi_create_network
     update_network: unifi_update_network
     delete_network: unifi_delete_network
+    resource_list: unifi_resource_list
+    resource_get: unifi_resource_get
+    resource_create: unifi_resource_create
+    resource_update: unifi_resource_update
+    resource_delete: unifi_resource_delete
 
 install:
   runtime: uv

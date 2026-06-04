@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Annotated
+from typing import Annotated, Any, Literal
 
 from fastmcp import FastMCP
 from pydantic import Field
@@ -25,12 +25,32 @@ from ubiquiti_unifi_blade_mcp.formatters import (
     format_network_detail,
     format_network_list,
     format_port_forwards,
+    format_resource_detail,
+    format_resource_list,
     format_sites,
     format_traffic_routes,
     format_traffic_rules,
     format_wlan_list,
 )
 from ubiquiti_unifi_blade_mcp.models import network_spec_from_args, require_write
+
+# Integration-API resources reachable via the generic resource tools (X-API-KEY).
+# Mirrors client._INTEGRATION_RESOURCES; read-only ones reject create/update/delete.
+ResourceName = Literal[
+    "networks",
+    "wifi",
+    "firewall_policies",
+    "firewall_zones",
+    "acl_rules",
+    "dns_policies",
+    "traffic_matching_lists",
+    "vouchers",
+    "wan_interfaces",
+    "radius_profiles",
+    "vpn_servers",
+    "vpn_tunnels",
+    "device_tags",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -499,6 +519,118 @@ async def unifi_delete_network(
     try:
         await _get_client().delete_network(network_id, controller)
         return f"Deleted network {network_id}"
+    except UniFiError as e:
+        return _error_response(e)
+
+
+# ===========================================================================
+# GENERIC INTEGRATION-API RESOURCES (X-API-KEY)
+# ===========================================================================
+# Cover the official resources beyond networks: WLANs (wifi), firewall
+# policies/zones, ACL rules, DNS policies, traffic-matching lists, vouchers,
+# plus read-only reference data (WANs, RADIUS, VPN, device tags). Writes take a
+# raw JSON `body` per the on-console v10.x schema (confirm via Settings →
+# Control Plane → Integrations). All require UNIFI_API_KEY.
+
+
+@mcp.tool()
+async def unifi_resource_list(
+    resource: Annotated[ResourceName, Field(description="Integration-API resource to list")],
+    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+) -> str:
+    """List items of an Integration-API resource (wifi, firewall_policies, acl_rules, dns_policies, vouchers, …).
+
+    Requires UNIFI_API_KEY.
+    """
+    try:
+        items = await _get_client().integration_list(resource, controller)
+        return format_resource_list(items, resource)
+    except UniFiError as e:
+        return _error_response(e)
+
+
+@mcp.tool()
+async def unifi_resource_get(
+    resource: Annotated[ResourceName, Field(description="Integration-API resource")],
+    item_id: Annotated[str, Field(description="Item id (from unifi_resource_list)")],
+    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+) -> str:
+    """Full detail for one Integration-API resource item. Requires UNIFI_API_KEY."""
+    try:
+        item = await _get_client().integration_get(resource, item_id, controller)
+        if item is None:
+            return f"Error: {resource} {item_id} not found"
+        return format_resource_detail(item)
+    except UniFiError as e:
+        return _error_response(e)
+
+
+@mcp.tool()
+async def unifi_resource_create(
+    resource: Annotated[ResourceName, Field(description="Integration-API resource (must be writable)")],
+    body: Annotated[
+        dict[str, Any],
+        Field(description="Raw JSON body per the v10.x Integration-API schema for this resource"),
+    ],
+    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    confirm: Annotated[bool, Field(description="Must be true to confirm the create")] = False,
+) -> str:
+    """Create an Integration-API resource item from a raw body.
+
+    Requires UNIFI_API_KEY, UNIFI_WRITE_ENABLED=true, confirm=true.
+    """
+    gate = require_write()
+    if gate:
+        return gate
+    if not confirm:
+        return f"Error: Set confirm=true to create this {resource} item."
+    try:
+        created = await _get_client().integration_create(resource, body, controller)
+        return f"Created {resource} item\n{format_resource_detail(created)}"
+    except UniFiError as e:
+        return _error_response(e)
+
+
+@mcp.tool()
+async def unifi_resource_update(
+    resource: Annotated[ResourceName, Field(description="Integration-API resource (must be writable)")],
+    item_id: Annotated[str, Field(description="Item id (from unifi_resource_list)")],
+    body: Annotated[
+        dict[str, Any],
+        Field(description="Raw JSON body (PUT) per the v10.x Integration-API schema for this resource"),
+    ],
+    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    confirm: Annotated[bool, Field(description="Must be true to confirm the update")] = False,
+) -> str:
+    """Update (PUT) an Integration-API resource item. Requires UNIFI_API_KEY, UNIFI_WRITE_ENABLED=true, confirm=true."""
+    gate = require_write()
+    if gate:
+        return gate
+    if not confirm:
+        return f"Error: Set confirm=true to update this {resource} item."
+    try:
+        updated = await _get_client().integration_update(resource, item_id, body, controller)
+        return f"Updated {resource} {item_id}\n{format_resource_detail(updated)}"
+    except UniFiError as e:
+        return _error_response(e)
+
+
+@mcp.tool()
+async def unifi_resource_delete(
+    resource: Annotated[ResourceName, Field(description="Integration-API resource (must be writable)")],
+    item_id: Annotated[str, Field(description="Item id (from unifi_resource_list)")],
+    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    confirm: Annotated[bool, Field(description="Must be true to confirm — permanent")] = False,
+) -> str:
+    """Delete an Integration-API resource item. Requires UNIFI_API_KEY, UNIFI_WRITE_ENABLED=true, confirm=true."""
+    gate = require_write()
+    if gate:
+        return gate
+    if not confirm:
+        return f"Error: Set confirm=true to delete this {resource} item. This is permanent."
+    try:
+        await _get_client().integration_delete(resource, item_id, controller)
+        return f"Deleted {resource} {item_id}"
     except UniFiError as e:
         return _error_response(e)
 
