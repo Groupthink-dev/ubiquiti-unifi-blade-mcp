@@ -1,12 +1,12 @@
 # ubiquiti-unifi-blade-mcp
 
-UniFi monitoring, security, and Integration-API resource management MCP. 28 tools, token-efficient output, multi-controller.
+UniFi monitoring, security, and Integration-API resource management MCP. 29 tools, token-efficient output, multi-controller.
 
 ## Architecture
 
 ```
 src/ubiquiti_unifi_blade_mcp/
-├── server.py       — FastMCP 3.x server, 28 @mcp.tool decorators
+├── server.py       — FastMCP 3.x server, 29 @mcp.tool decorators (incl. unifi_controllers discovery + _write_gate multi-console safety)
 ├── client.py       — UniFiClient: aiounifi session auth + Integration API (X-API-KEY) generic resource layer, multi-controller, credential scrubbing
 ├── formatters.py   — Token-efficient output (pipe-delimited, null omission, human units) + generic resource formatters
 ├── models.py       — ControllerConfig (auth_mode), write gate, parse_controllers(), network_spec_from_args()

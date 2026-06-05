@@ -55,6 +55,19 @@ class TestUniFiClientInit:
         client = UniFiClient()
         assert client.controller_names == ["default"]
 
+    def test_controllers_summary_single(self, mock_env: None) -> None:
+        client = UniFiClient()
+        assert client.controllers_summary() == [
+            {"name": "default", "host": "192.168.1.1", "default": True},
+        ]
+
+    def test_controllers_summary_multi_marks_first_default(self, mock_env_multi: None) -> None:
+        client = UniFiClient()
+        summary = client.controllers_summary()
+        assert [c["name"] for c in summary] == ["home", "office"]
+        assert summary[0] == {"name": "home", "host": "192.168.1.1", "default": True}
+        assert summary[1]["default"] is False
+
 
 class TestNormalizeNetwork:
     def test_camelcase(self) -> None:

@@ -1,5 +1,5 @@
 name: ubiquiti-unifi-blade-mcp
-version: "0.4.0"
+version: "0.5.0"
 description: "Ubiquiti UniFi monitoring, security, and Integration-API resource management — device/client/firewall visibility plus CRUD for networks/VLANs, WiFi, firewall policies/zones, ACL rules, DNS policies, traffic-matching lists, and vouchers via the official Integration API"
 author: groupthink-dev
 license: MIT

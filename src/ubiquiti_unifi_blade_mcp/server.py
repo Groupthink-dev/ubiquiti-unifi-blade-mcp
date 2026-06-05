@@ -81,7 +81,9 @@ mcp = FastMCP(
         "inspect firewall policies, check traffic routes, and manage WLANs. "
         "Manage networks/VLANs (list/create/update/delete) via the official "
         "Integration API — these tools require an API key (UNIFI_API_KEY). "
-        "Multi-controller support — pass controller= to target a specific controller. "
+        "Multi-controller support — call unifi_controllers to list configured consoles, then "
+        "pass controller= to target one. Omitting controller uses the default (first) console on "
+        "reads; mutating tools require an explicit controller when more than one is configured. "
         "Write operations (block/unblock, WLAN toggle, restart, network create/update/delete) "
         "require UNIFI_WRITE_ENABLED=true; destructive ones also require confirm=true."
     ),
@@ -104,9 +106,55 @@ def _error_response(e: UniFiError) -> str:
     return f"Error: {e}"
 
 
+def _write_gate(controller: str | None) -> str | None:
+    """Combined gate for mutating tools.
+
+    Returns an error string to short-circuit, or ``None`` to proceed. Enforces
+    two rules in order:
+
+    1. Writes must be enabled (``UNIFI_WRITE_ENABLED=true``) — delegates to
+       :func:`require_write`.
+    2. When more than one controller is configured, ``controller`` must be
+       supplied explicitly. Omitting it would silently target the default (first
+       configured) console — fine for reads, unacceptable for a mutation that
+       could land on the wrong network (DD-343 connection-scoping threat model).
+
+    Single-controller deployments keep the ergonomic omit (rule 2 is a no-op).
+    """
+    gate = require_write()
+    if gate:
+        return gate
+    names = _get_client().controller_names
+    if controller is None and len(names) > 1:
+        return (
+            f"Error: {len(names)} controllers configured ({', '.join(names)}). "
+            "Pass controller=<name> to choose which console this write targets "
+            "(see unifi_controllers)."
+        )
+    return None
+
+
 # ===========================================================================
 # INFO & SITES
 # ===========================================================================
+
+
+@mcp.tool()
+async def unifi_controllers() -> str:
+    """List the UniFi controllers (consoles) this server is configured for.
+
+    Zero-network. Returns the names accepted by every tool's ``controller``
+    argument, each console's host, and which one is the default (used when
+    ``controller`` is omitted on read tools). Call this first when more than one
+    console may be configured — mutating tools require an explicit ``controller``
+    in that case.
+    """
+    summary = _get_client().controllers_summary()
+    if not summary:
+        return "No controllers configured."
+    lines = [f"{c['name']}{' (default)' if c['default'] else ''} — {c['host']}" for c in summary]
+    suffix = "" if len(summary) == 1 else "\n\nPass controller=<name> to target one; mutations require it."
+    return "\n".join(lines) + suffix
 
 
 @mcp.tool()
@@ -123,7 +171,7 @@ async def unifi_info(
 
 @mcp.tool()
 async def unifi_sites(
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """List sites on the controller."""
     try:
@@ -140,7 +188,7 @@ async def unifi_sites(
 
 @mcp.tool()
 async def unifi_networks(
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """List networks/VLANs: name, VLAN id, enabled/disabled, purpose, subnet. Requires UNIFI_API_KEY."""
     try:
@@ -153,7 +201,7 @@ async def unifi_networks(
 @mcp.tool()
 async def unifi_network(
     network_id: Annotated[str, Field(description="Network ID (from unifi_networks)")],
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """Full detail for a single network/VLAN: VLAN id, subnet, gateway, purpose. Requires UNIFI_API_KEY."""
     try:
@@ -172,7 +220,7 @@ async def unifi_network(
 
 @mcp.tool()
 async def unifi_devices(
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """List all network devices (APs, switches, gateways) with status, model, clients, uptime, firmware."""
     try:
@@ -185,7 +233,7 @@ async def unifi_devices(
 @mcp.tool()
 async def unifi_device(
     mac: Annotated[str, Field(description="Device MAC address (from unifi_devices)")],
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """Full detail for a single device: model, firmware, uptime, port table with PoE, client count."""
     try:
@@ -204,7 +252,7 @@ async def unifi_device(
 
 @mcp.tool()
 async def unifi_clients(
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """List connected clients: name, IP, SSID/wired, signal, experience score, blocked status."""
     try:
@@ -217,7 +265,7 @@ async def unifi_clients(
 @mcp.tool()
 async def unifi_client(
     mac: Annotated[str, Field(description="Client MAC address (from unifi_clients)")],
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """Full detail for a single client: IP, network, SSID, signal, experience, TX/RX, vendor, AP."""
     try:
@@ -236,7 +284,7 @@ async def unifi_client(
 
 @mcp.tool()
 async def unifi_wlans(
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """List all WLANs (SSIDs): name, enabled/disabled, security type, guest flag."""
     try:
@@ -253,7 +301,7 @@ async def unifi_wlans(
 
 @mcp.tool()
 async def unifi_firewall(
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """Firewall policies: name, enabled/disabled, action, source/destination zones."""
     try:
@@ -265,7 +313,7 @@ async def unifi_firewall(
 
 @mcp.tool()
 async def unifi_traffic_routes(
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """Traffic routes: description, enabled/disabled, matching target."""
     try:
@@ -277,7 +325,7 @@ async def unifi_traffic_routes(
 
 @mcp.tool()
 async def unifi_traffic_rules(
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """Traffic rules: description, enabled/disabled, action, matching target."""
     try:
@@ -289,7 +337,7 @@ async def unifi_traffic_rules(
 
 @mcp.tool()
 async def unifi_port_forwards(
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """Port forwarding rules: name, enabled/disabled, protocol, external → internal mapping."""
     try:
@@ -301,7 +349,7 @@ async def unifi_port_forwards(
 
 @mcp.tool()
 async def unifi_dpi(
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """DPI restriction groups and apps: name, enabled/disabled."""
     try:
@@ -319,11 +367,11 @@ async def unifi_dpi(
 @mcp.tool()
 async def unifi_block_client(
     mac: Annotated[str, Field(description="Client MAC address to block")],
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
     confirm: Annotated[bool, Field(description="Must be true to confirm — blocks client from network")] = False,
 ) -> str:
     """Block a client from the network. Requires UNIFI_WRITE_ENABLED=true and confirm=true."""
-    gate = require_write()
+    gate = _write_gate(controller)
     if gate:
         return gate
     if not confirm:
@@ -338,10 +386,10 @@ async def unifi_block_client(
 @mcp.tool()
 async def unifi_unblock_client(
     mac: Annotated[str, Field(description="Client MAC address to unblock")],
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """Unblock a previously blocked client. Requires UNIFI_WRITE_ENABLED=true."""
-    gate = require_write()
+    gate = _write_gate(controller)
     if gate:
         return gate
     try:
@@ -354,10 +402,10 @@ async def unifi_unblock_client(
 @mcp.tool()
 async def unifi_reconnect_client(
     mac: Annotated[str, Field(description="Client MAC address to reconnect")],
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """Force a wireless client to reconnect. Requires UNIFI_WRITE_ENABLED=true."""
-    gate = require_write()
+    gate = _write_gate(controller)
     if gate:
         return gate
     try:
@@ -371,10 +419,10 @@ async def unifi_reconnect_client(
 async def unifi_toggle_wlan(
     wlan_id: Annotated[str, Field(description="WLAN ID (from unifi_wlans)")],
     enable: Annotated[bool, Field(description="True to enable, false to disable")],
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """Enable or disable a WLAN (SSID). Requires UNIFI_WRITE_ENABLED=true."""
-    gate = require_write()
+    gate = _write_gate(controller)
     if gate:
         return gate
     try:
@@ -392,10 +440,10 @@ async def unifi_toggle_wlan(
 async def unifi_toggle_traffic_route(
     route_id: Annotated[str, Field(description="Traffic route ID (from unifi_traffic_routes)")],
     enable: Annotated[bool, Field(description="True to enable, false to disable")],
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """Enable or disable a traffic route. Requires UNIFI_WRITE_ENABLED=true."""
-    gate = require_write()
+    gate = _write_gate(controller)
     if gate:
         return gate
     try:
@@ -412,14 +460,14 @@ async def unifi_toggle_traffic_route(
 @mcp.tool()
 async def unifi_restart_device(
     mac: Annotated[str, Field(description="Device MAC address (from unifi_devices)")],
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
     confirm: Annotated[
         bool,
         Field(description="Must be true to confirm — device will be offline during restart"),
     ] = False,
 ) -> str:
     """Restart a network device (AP, switch, gateway). Requires UNIFI_WRITE_ENABLED=true and confirm=true."""
-    gate = require_write()
+    gate = _write_gate(controller)
     if gate:
         return gate
     if not confirm:
@@ -441,11 +489,11 @@ async def unifi_create_network(
     dhcp_stop: Annotated[str | None, Field(description="DHCP range end, e.g. '10.1.40.200'")] = None,
     purpose: Annotated[str, Field(description="Network purpose (corporate, guest, vlan-only)")] = "corporate",
     enabled: Annotated[bool, Field(description="Whether the network is enabled")] = True,
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
     confirm: Annotated[bool, Field(description="Must be true to confirm — creates a network/VLAN")] = False,
 ) -> str:
     """Create a network/VLAN. Requires UNIFI_API_KEY, UNIFI_WRITE_ENABLED=true and confirm=true."""
-    gate = require_write()
+    gate = _write_gate(controller)
     if gate:
         return gate
     if not confirm:
@@ -475,11 +523,11 @@ async def unifi_update_network(
     subnet: Annotated[str | None, Field(description="New CIDR, e.g. '10.1.40.254/24'")] = None,
     gateway: Annotated[str | None, Field(description="New gateway IP")] = None,
     enabled: Annotated[bool | None, Field(description="Enable/disable the network")] = None,
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
     confirm: Annotated[bool, Field(description="Must be true to confirm — modifies a network/VLAN")] = False,
 ) -> str:
     """Update a network/VLAN (only supplied fields). Requires UNIFI_API_KEY, UNIFI_WRITE_ENABLED=true, confirm=true."""
-    gate = require_write()
+    gate = _write_gate(controller)
     if gate:
         return gate
     if not confirm:
@@ -507,11 +555,11 @@ async def unifi_update_network(
 @mcp.tool()
 async def unifi_delete_network(
     network_id: Annotated[str, Field(description="Network ID (from unifi_networks)")],
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
     confirm: Annotated[bool, Field(description="Must be true to confirm — permanently deletes the network")] = False,
 ) -> str:
     """Delete a network/VLAN. Requires UNIFI_API_KEY, UNIFI_WRITE_ENABLED=true and confirm=true."""
-    gate = require_write()
+    gate = _write_gate(controller)
     if gate:
         return gate
     if not confirm:
@@ -536,7 +584,7 @@ async def unifi_delete_network(
 @mcp.tool()
 async def unifi_resource_list(
     resource: Annotated[ResourceName, Field(description="Integration-API resource to list")],
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """List items of an Integration-API resource (wifi, firewall_policies, acl_rules, dns_policies, vouchers, …).
 
@@ -553,7 +601,7 @@ async def unifi_resource_list(
 async def unifi_resource_get(
     resource: Annotated[ResourceName, Field(description="Integration-API resource")],
     item_id: Annotated[str, Field(description="Item id (from unifi_resource_list)")],
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """Full detail for one Integration-API resource item. Requires UNIFI_API_KEY."""
     try:
@@ -572,14 +620,14 @@ async def unifi_resource_create(
         dict[str, Any],
         Field(description="Raw JSON body per the v10.x Integration-API schema for this resource"),
     ],
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
     confirm: Annotated[bool, Field(description="Must be true to confirm the create")] = False,
 ) -> str:
     """Create an Integration-API resource item from a raw body.
 
     Requires UNIFI_API_KEY, UNIFI_WRITE_ENABLED=true, confirm=true.
     """
-    gate = require_write()
+    gate = _write_gate(controller)
     if gate:
         return gate
     if not confirm:
@@ -599,11 +647,11 @@ async def unifi_resource_update(
         dict[str, Any],
         Field(description="Raw JSON body (PUT) per the v10.x Integration-API schema for this resource"),
     ],
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
     confirm: Annotated[bool, Field(description="Must be true to confirm the update")] = False,
 ) -> str:
     """Update (PUT) an Integration-API resource item. Requires UNIFI_API_KEY, UNIFI_WRITE_ENABLED=true, confirm=true."""
-    gate = require_write()
+    gate = _write_gate(controller)
     if gate:
         return gate
     if not confirm:
@@ -619,11 +667,11 @@ async def unifi_resource_update(
 async def unifi_resource_delete(
     resource: Annotated[ResourceName, Field(description="Integration-API resource (must be writable)")],
     item_id: Annotated[str, Field(description="Item id (from unifi_resource_list)")],
-    controller: Annotated[str | None, Field(description="Controller name (omit for default)")] = None,
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
     confirm: Annotated[bool, Field(description="Must be true to confirm — permanent")] = False,
 ) -> str:
     """Delete an Integration-API resource item. Requires UNIFI_API_KEY, UNIFI_WRITE_ENABLED=true, confirm=true."""
-    gate = require_write()
+    gate = _write_gate(controller)
     if gate:
         return gate
     if not confirm:

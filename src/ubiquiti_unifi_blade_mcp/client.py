@@ -105,6 +105,18 @@ class UniFiClient:
         """Return configured controller names."""
         return [c.name for c in self._configs]
 
+    def controllers_summary(self) -> list[dict[str, Any]]:
+        """Network-free summary of configured controllers.
+
+        One entry per controller with its ``name``, ``host``, and a ``default``
+        flag (the controller selected when a tool's ``controller`` argument is
+        omitted — the first configured controller). Backs the
+        ``unifi_controllers`` discovery tool so the model can populate the
+        ``controller`` enum without touching any console.
+        """
+        default_name = self._configs[0].name if self._configs else None
+        return [{"name": c.name, "host": c.host, "default": c.name == default_name} for c in self._configs]
+
     def _get_config(self, controller: str | None = None) -> ControllerConfig:
         """Get configuration for the given controller."""
         name = controller or self._configs[0].name

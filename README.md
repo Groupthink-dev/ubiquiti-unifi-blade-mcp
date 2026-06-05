@@ -76,13 +76,14 @@ The API key is generated **on the UniFi console UI** (not via this MCP). Ubiquit
 >
 > **If the menu doesn't match:** open the console's built-in API reference (linked from the Integrations page) — it always reflects *your* installed version, and is the authoritative source when this doc has aged. Requires UniFi Network **9.0+** (full network/VLAN/firewall CRUD confirmed on **10.x**).
 
-## 28 tools, 7 categories
+## 29 tools, 7 categories
 
-### Info & Sites (2 tools)
+### Info & Sites (3 tools)
 
 | Tool | Purpose | Token cost |
 |------|---------|------------|
-| `unifi_info` | Health check — controller version, hostname, device/client counts, write gate | ~60 |
+| `unifi_controllers` | List configured consoles (names, hosts, default) — zero-network; populates the `controller` selector | ~15 |
+| `unifi_info` | Health check — controller version, hostname, device/client counts, write gate (all consoles when `controller` omitted) | ~60 |
 | `unifi_sites` | List sites on the controller | ~20/site |
 
 ### Networks & VLANs (2 read tools — require `UNIFI_API_KEY`)
@@ -192,13 +193,20 @@ export UNIFI_OFFICE_USERNAME="admin"
 export UNIFI_OFFICE_PASSWORD="office-password"
 ```
 
-Pass `controller="office"` to any tool. Omit for the first configured controller.
+Call `unifi_controllers` to list the configured consoles, then pass e.g. `controller="office"` to any tool. Selection rules:
+
+- **Read tools** — omit `controller` to use the default (first configured) console.
+- **Survey tools** (`unifi_info`, `unifi_controllers`) — omit `controller` to span **all** consoles.
+- **Write tools** — when more than one console is configured, `controller` is **required**; an omitted controller is refused rather than silently targeting the default. This prevents a mutation (block, restart, network delete) from landing on the wrong network. Single-console setups keep the ergonomic omit.
+
+> The parameter is named `controller` (UniFi-idiomatic). When this blade graduates to a published Stallari pack it will alias to the cross-pack canonical `connection_id` per DD-343.
 
 ## Security model
 
 | Layer | Mechanism |
 |-------|-----------|
 | **Write gate** | `UNIFI_WRITE_ENABLED=true` required for any mutation |
+| **Multi-console write scoping** | With >1 console configured, write tools require an explicit `controller=` — an omitted controller is refused, never silently defaulted (DD-343 connection-scoping) |
 | **Destructive confirm** | `unifi_block_client`, `unifi_restart_device`, and all `unifi_*_network` write tools require `confirm=true` |
 | **Credential scrubbing** | Passwords, cookies, CSRF tokens, `X-API-KEY`, session IDs stripped from errors |
 | **Controller API key** | `UNIFI_API_KEY` (`X-API-KEY`) — scoped Integration API key for network/VLAN tools |
