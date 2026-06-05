@@ -1,6 +1,10 @@
 # ubiquiti-unifi-blade-mcp
 
+![status: beta](https://img.shields.io/badge/status-beta-yellow)
+
 An MCP server that gives AI agents structured access to Ubiquiti UniFi network controllers. Built for the [Model Context Protocol](https://modelcontextprotocol.io) with security visibility and token efficiency as first-class design goals.
+
+> **Beta.** Monitoring (read) and Integration-API network/VLAN CRUD are live-verified across multiple UniFi OS 10.x consoles. The GATEWAY (routed) create path applies conservative defaults and is verified for the common DHCP case. A full live e2e suite against a disposable sandbox controller is planned ([DD-382]) before a 1.0 stable label.
 
 ## Why this exists
 
