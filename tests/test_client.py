@@ -93,6 +93,30 @@ class TestNormalizeNetwork:
         assert n["subnet"] == "10.1.20.254/24"
         assert n["purpose"] == "corporate"
 
+    def test_ipv4configuration_derives_subnet_and_gateway(self) -> None:
+        # The real Integration-API shape: subnet=network CIDR, gateway=host IP.
+        n = UniFiClient._normalize_network(
+            {
+                "id": "n9",
+                "name": "v40-svc",
+                "vlanId": 40,
+                "enabled": True,
+                "management": "GATEWAY",
+                "ipv4Configuration": {"hostIpAddress": "10.1.40.1", "prefixLength": 24},
+            }
+        )
+        assert n["subnet"] == "10.1.40.0/24"
+        assert n["gateway"] == "10.1.40.1"
+        assert n["purpose"] == "GATEWAY"
+
+    def test_unmanaged_has_no_subnet(self) -> None:
+        # UNMANAGED (VLAN-only) networks carry no ipv4Configuration → empty L3 fields.
+        n = UniFiClient._normalize_network(
+            {"id": "u1", "name": "v80", "vlanId": 80, "enabled": True, "management": "UNMANAGED"}
+        )
+        assert n["subnet"] == ""
+        assert n["gateway"] == ""
+
 
 class TestNetworkClient:
     async def test_get_networks_path_and_parse(self, mock_env_apikey: None, mocker: MockerFixture) -> None:

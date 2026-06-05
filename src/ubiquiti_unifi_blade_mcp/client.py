@@ -6,6 +6,7 @@ and session management. All methods are async — aiounifi is natively async.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import re
@@ -796,15 +797,36 @@ class UniFiClient:
 
     @staticmethod
     def _normalize_network(n: dict[str, Any]) -> dict[str, Any]:
-        """Normalize a network record across camelCase (Integration API) / snake_case (legacy)."""
+        """Normalize a network record across camelCase (Integration API) / snake_case (legacy).
+
+        The Integration API carries L3 config under ``ipv4Configuration``
+        (``hostIpAddress`` + ``prefixLength``), NOT the legacy flat
+        ``ipSubnet``/``gatewayIp`` keys — so derive ``subnet`` (the network CIDR,
+        e.g. ``10.1.40.0/24``) and ``gateway`` (the host/SVI IP) from it, falling
+        back to the legacy keys. UNMANAGED (VLAN-only) networks have no
+        ``ipv4Configuration`` → both stay empty, which is correct.
+        """
+        subnet = n.get("ipSubnet") or n.get("ip_subnet") or n.get("subnet") or ""
+        gateway = n.get("gatewayIp") or n.get("gateway") or ""
+        ipv4 = n.get("ipv4Configuration")
+        if isinstance(ipv4, dict):
+            host = ipv4.get("hostIpAddress")
+            prefix = ipv4.get("prefixLength")
+            if host:
+                gateway = gateway or str(host)
+                if prefix is not None and not subnet:
+                    try:
+                        subnet = str(ipaddress.ip_interface(f"{host}/{prefix}").network)
+                    except ValueError:
+                        subnet = f"{host}/{prefix}"
         return {
             "id": n.get("id") or n.get("_id", ""),
             "name": n.get("name", "?"),
             "enabled": n.get("enabled", n.get("vlan_enabled", True)),
             "vlan": n.get("vlanId", n.get("vlan")),
             "purpose": n.get("purpose") or n.get("management") or "",
-            "subnet": n.get("ipSubnet") or n.get("ip_subnet") or n.get("subnet") or "",
-            "gateway": n.get("gatewayIp") or n.get("gateway") or "",
+            "subnet": subnet,
+            "gateway": gateway,
         }
 
     # Dedicated network/VLAN methods — ergonomic typed surface over the generic
