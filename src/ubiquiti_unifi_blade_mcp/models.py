@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
 from dataclasses import dataclass
@@ -157,6 +158,12 @@ def network_spec_from_args(
     dhcp_stop: str | None = None,
     purpose: str = "corporate",
     enabled: bool = True,
+    lease_seconds: int = 86400,
+    domain_name: str = "",
+    dhcp_mode: str = "server",
+    ping_conflict: bool = True,
+    isolated: bool = False,
+    internet_access: bool = True,
 ) -> dict[str, object]:
     """Assemble an Integration-API ``networks`` payload from flat tool arguments.
 
@@ -175,6 +182,17 @@ def network_spec_from_args(
       those required fields. Conservative defaults are applied for the scalars.
 
     This builder is the single adjustment point — callers and tests read its output.
+
+    Optional DHCP/L3 knobs (GATEWAY only) each default to today's hardcoded
+    constant so omission is byte-identical to the prior behaviour:
+    ``lease_seconds`` (DHCP lease, default 86400), ``domain_name`` (DHCP search
+    domain — omitted on ``""``), ``dhcp_mode`` (``"server"`` | ``"none"``;
+    ``"none"`` suppresses the ``dhcpConfiguration`` even when a range is given —
+    relay is DEFERRED, OQ-3), ``ping_conflict``, ``isolated`` (was hardcoded
+    ``False``), and ``internet_access`` (was hardcoded ``True``). DNS-server
+    plumbing is intentionally NOT exposed in Phase A — the wire shape
+    (``dnsServer1/2/3`` scalar vs array) is unconfirmed (OQ-2) and deferred to
+    the live-verify phase rather than guessed.
     """
     management = _MANAGEMENT_BY_PURPOSE.get((purpose or "").strip().lower(), "GATEWAY")
     spec: dict[str, object] = {"management": management, "name": name, "enabled": enabled}
@@ -188,9 +206,9 @@ def network_spec_from_args(
     # GATEWAY (routed) networks require these scalar fields on create — the API
     # rejects null (verified live on Network 10.x 2026-06-06: "isolationEnabled
     # must not be null", etc.). Conservative defaults for a new network.
-    spec["isolationEnabled"] = False
+    spec["isolationEnabled"] = isolated
     spec["cellularBackupEnabled"] = False
-    spec["internetAccessEnabled"] = True
+    spec["internetAccessEnabled"] = internet_access
 
     host_ip, prefix = _parse_host_and_prefix(subnet, gateway)
     if host_ip and prefix is not None:
@@ -199,17 +217,98 @@ def network_spec_from_args(
             "hostIpAddress": host_ip,
             "prefixLength": prefix,
         }
-        if dhcp_start and dhcp_stop:
+        # dhcp_mode == "none" suppresses the dhcpConfiguration even when a range
+        # is supplied (relay is DEFERRED — OQ-3, not in this phase).
+        if dhcp_start and dhcp_stop and (dhcp_mode or "").strip().lower() != "none":
             # leaseTimeSeconds + pingConflictDetectionEnabled are required (non-null)
             # whenever a dhcpConfiguration is present.
-            ipv4["dhcpConfiguration"] = {
+            dhcp: dict[str, object] = {
                 "mode": "SERVER",
                 "ipAddressRange": {"start": dhcp_start, "stop": dhcp_stop},
-                "leaseTimeSeconds": 86400,
-                "pingConflictDetectionEnabled": True,
+                "leaseTimeSeconds": lease_seconds,
+                "pingConflictDetectionEnabled": ping_conflict,
             }
+            # domainName is a live-confirmed dhcpConfiguration key; omit on "" to
+            # preserve current bytes.
+            if domain_name:
+                dhcp["domainName"] = domain_name
+            ipv4["dhcpConfiguration"] = dhcp
         spec["ipv4Configuration"] = ipv4
     return spec
+
+
+def merge_network_update(base: dict[str, object], changes: dict[str, object]) -> dict[str, object]:
+    """Deep-merge supplied ``changes`` into a fetched network object (read-merge-write).
+
+    The Integration-API ``PUT`` replaces the whole object, so a blind partial PUT
+    wipes everything not re-sent — the /16→/24 DHCP-loss bug DD-383 fixes. This
+    helper deep-copies ``base`` (the un-normalized object from ``integration_get``,
+    preserving server-managed keys like ``mdnsForwardingEnabled``/``metadata``/
+    zone) and overlays ONLY the supplied fields.
+
+    Recognized ``changes`` keys (anything else is ignored — this is not a
+    pass-through):
+
+    - Top-level scalars: ``name``, ``vlanId``, ``enabled``, ``isolationEnabled``,
+      ``internetAccessEnabled``.
+    - L3: ``subnet`` (CIDR-with-host) and/or ``gateway`` translate to nested
+      ``ipv4Configuration.hostIpAddress`` / ``prefixLength`` the same way create
+      does (``_parse_host_and_prefix``); the legacy flat ``ipSubnet``/``gatewayIp``
+      keys are NOT emitted.
+    - DHCP (merged into ``ipv4Configuration.dhcpConfiguration`` without replacing
+      it): ``dhcp_start``/``dhcp_stop`` → ``ipAddressRange.start``/``stop``;
+      ``leaseTimeSeconds``, ``pingConflictDetectionEnabled``, ``domainName``.
+
+    Nested dicts are merged, not replaced, so editing only the prefix preserves
+    the existing DHCP range/lease and the server-managed keys.
+    """
+    merged = copy.deepcopy(base)
+
+    for key in ("name", "vlanId", "enabled", "isolationEnabled", "internetAccessEnabled"):
+        if key in changes:
+            merged[key] = changes[key]
+
+    host_ip, prefix = _parse_host_and_prefix(
+        changes.get("subnet"),  # type: ignore[arg-type]
+        changes.get("gateway"),  # type: ignore[arg-type]
+    )
+    dhcp_changes = {
+        api_key: changes[chg_key]
+        for chg_key, api_key in (
+            ("dhcp_start", "ipAddressRange.start"),
+            ("dhcp_stop", "ipAddressRange.stop"),
+            ("leaseTimeSeconds", "leaseTimeSeconds"),
+            ("pingConflictDetectionEnabled", "pingConflictDetectionEnabled"),
+            ("domainName", "domainName"),
+        )
+        if chg_key in changes
+    }
+
+    if host_ip is not None or prefix is not None or dhcp_changes:
+        ipv4 = merged.get("ipv4Configuration")
+        if not isinstance(ipv4, dict):
+            ipv4 = {}
+        if host_ip is not None:
+            ipv4["hostIpAddress"] = host_ip
+        if prefix is not None:
+            ipv4["prefixLength"] = prefix
+        if dhcp_changes:
+            dhcp = ipv4.get("dhcpConfiguration")
+            if not isinstance(dhcp, dict):
+                dhcp = {}
+            for api_key, value in dhcp_changes.items():
+                if api_key.startswith("ipAddressRange."):
+                    rng = dhcp.get("ipAddressRange")
+                    if not isinstance(rng, dict):
+                        rng = {}
+                    rng[api_key.split(".", 1)[1]] = value
+                    dhcp["ipAddressRange"] = rng
+                else:
+                    dhcp[api_key] = value
+            ipv4["dhcpConfiguration"] = dhcp
+        merged["ipv4Configuration"] = ipv4
+
+    return merged
 
 
 def is_write_enabled() -> bool:

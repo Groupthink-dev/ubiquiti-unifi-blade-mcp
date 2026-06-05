@@ -143,6 +143,107 @@ class TestNetworkClient:
         req.assert_awaited_once_with("post", "sites/S/networks", controller=None, json_body=spec)
         assert net["id"] == "new1"
 
+    async def test_update_network_reads_merges_and_puts(self, mock_env_apikey: None, mocker: MockerFixture) -> None:
+        # update_network must GET the current object, deep-merge the changes, and
+        # PUT the MERGED body — not the bare changes. A prefix-only edit must
+        # preserve the existing DHCP config (the anti-wipe regression).
+        client = UniFiClient()
+        mocker.patch.object(client, "_resolve_integration_site_id", return_value="S")
+        current = {
+            "id": "n9",
+            "name": "v40",
+            "vlanId": 40,
+            "enabled": True,
+            "management": "GATEWAY",
+            "mdnsForwardingEnabled": True,
+            "ipv4Configuration": {
+                "autoScaleEnabled": False,
+                "hostIpAddress": "10.1.40.1",
+                "prefixLength": 16,
+                "dhcpConfiguration": {
+                    "mode": "SERVER",
+                    "ipAddressRange": {"start": "10.1.40.100", "stop": "10.1.40.200"},
+                    "leaseTimeSeconds": 86400,
+                    "pingConflictDetectionEnabled": True,
+                },
+            },
+        }
+
+        async def fake_request(method: str, path: str, **kwargs: object) -> dict[str, object]:
+            if method == "get":
+                return current
+            return {"id": "n9", "name": "v40", "ipv4Configuration": {"hostIpAddress": "10.1.40.1", "prefixLength": 24}}
+
+        req = mocker.patch.object(client, "_integration_request", side_effect=fake_request)
+        await client.update_network("n9", {"subnet": "10.1.40.1/24"})
+
+        # GET fired first, then PUT with the merged body.
+        get_call, put_call = req.await_args_list
+        assert get_call.args[0] == "get"
+        assert put_call.args[0] == "put"
+        assert put_call.args[1] == "sites/S/networks/n9"
+        put_body = put_call.kwargs["json_body"]
+        assert put_body["ipv4Configuration"]["prefixLength"] == 24
+        # DHCP + server-managed key preserved through the merge.
+        assert put_body["ipv4Configuration"]["dhcpConfiguration"]["leaseTimeSeconds"] == 86400
+        assert put_body["mdnsForwardingEnabled"] is True
+
+    async def test_resource_update_networks_path_also_read_merges(
+        self, mock_env_apikey: None, mocker: MockerFixture
+    ) -> None:
+        # AMEND-1: the SECOND mutation path — integration_update('networks', …) as
+        # called by unifi_resource_update — must ALSO read-merge, not blind-PUT.
+        client = UniFiClient()
+        mocker.patch.object(client, "_resolve_integration_site_id", return_value="S")
+        current = {
+            "id": "n9",
+            "management": "GATEWAY",
+            "ipv4Configuration": {
+                "hostIpAddress": "10.1.40.1",
+                "prefixLength": 16,
+                "dhcpConfiguration": {
+                    "mode": "SERVER",
+                    "ipAddressRange": {"start": "10.1.40.100", "stop": "10.1.40.200"},
+                    "leaseTimeSeconds": 86400,
+                    "pingConflictDetectionEnabled": True,
+                },
+            },
+        }
+
+        async def fake_request(method: str, path: str, **kwargs: object) -> dict[str, object]:
+            if method == "get":
+                return current
+            return {"id": "n9"}
+
+        req = mocker.patch.object(client, "_integration_request", side_effect=fake_request)
+        # Caller supplies a bare partial body (the blind-PUT hazard shape).
+        await client.integration_update("networks", "n9", {"subnet": "10.1.40.1/24"})
+
+        get_call, put_call = req.await_args_list
+        assert get_call.args[0] == "get"
+        assert put_call.args[0] == "put"
+        put_body = put_call.kwargs["json_body"]
+        assert put_body["ipv4Configuration"]["prefixLength"] == 24
+        # Existing DHCP preserved — a blind PUT would have wiped it.
+        assert put_body["ipv4Configuration"]["dhcpConfiguration"]["ipAddressRange"] == {
+            "start": "10.1.40.100",
+            "stop": "10.1.40.200",
+        }
+
+    async def test_non_networks_resource_update_stays_blind_put(
+        self, mock_env_apikey: None, mocker: MockerFixture
+    ) -> None:
+        # Other resources keep blind-PUT semantics (no GET, raw body forwarded).
+        client = UniFiClient()
+        mocker.patch.object(client, "_resolve_integration_site_id", return_value="S")
+        req = mocker.patch.object(client, "_integration_request", return_value={"id": "z1"})
+        body = {"name": "policy", "action": "ALLOW"}
+        await client.integration_update("firewall_policies", "z1", body)
+        req.assert_awaited_once()
+        call = req.await_args_list[0]
+        assert call.args[0] == "put"
+        assert call.kwargs["json_body"] == body
+
     async def test_delete_network(self, mock_env_apikey: None, mocker: MockerFixture) -> None:
         client = UniFiClient()
         mocker.patch.object(client, "_resolve_integration_site_id", return_value="S")
