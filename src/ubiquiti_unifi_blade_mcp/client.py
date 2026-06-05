@@ -18,7 +18,11 @@ from aiounifi.controller import Controller
 from aiounifi.models.api import ApiRequest
 from aiounifi.models.configuration import Configuration
 
-from ubiquiti_unifi_blade_mcp.models import ControllerConfig, parse_controllers
+from ubiquiti_unifi_blade_mcp.models import (
+    ControllerConfig,
+    merge_network_update,
+    parse_controllers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -776,13 +780,30 @@ class UniFiClient:
     async def integration_update(
         self, resource: str, item_id: str, body: dict[str, Any], controller: str | None = None
     ) -> dict[str, Any]:
-        """Update (PUT) an Integration-API resource item with the supplied body."""
+        """Update (PUT) an Integration-API resource item with the supplied body.
+
+        For ``networks`` the Integration-API ``PUT`` replaces the whole object, so
+        a blind partial body wipes everything not re-sent (the DHCP/L3-loss bug
+        DD-383 fixes). This method therefore does read-merge-write for
+        ``resource == 'networks'``: GET the current (un-normalized) object,
+        deep-merge ``body`` into it via :func:`merge_network_update`, and PUT the
+        merged result. This fires regardless of which tool calls in
+        (``unifi_update_network`` AND ``unifi_resource_update('networks')``) — the
+        single non-destructive chokepoint. Other resources keep blind-PUT
+        semantics (their raw body is the authored full object).
+        """
         path, read_only = self._resource_path(resource)
         if read_only:
             raise UniFiError(f"Resource '{resource}' is read-only — update is not supported.")
         site_id = await self._resolve_integration_site_id(controller)
+        put_body = body
+        if resource == "networks":
+            current = await self.integration_get("networks", item_id, controller)
+            if current is None:
+                raise UniFiError(f"Network {item_id} not found — cannot read-merge update.")
+            put_body = merge_network_update(current, body)
         data = await self._integration_request(
-            "put", f"sites/{site_id}/{path}/{item_id}", controller=controller, json_body=body
+            "put", f"sites/{site_id}/{path}/{item_id}", controller=controller, json_body=put_body
         )
         return data if isinstance(data, dict) else {}
 
@@ -848,14 +869,20 @@ class UniFiClient:
         return self._normalize_network(data) if data else {}
 
     async def update_network(
-        self, network_id: str, patch: dict[str, Any], controller: str | None = None
+        self, network_id: str, changes: dict[str, Any], controller: str | None = None
     ) -> dict[str, Any]:
-        """Update a network / VLAN (Integration API). Sends only the supplied fields.
+        """Update a network / VLAN (Integration API), read-merge-write.
 
-        NOTE (Phase 0): confirm whether the v10.4 ``PUT`` requires the full object
-        rather than a partial patch; if so, fetch-merge-PUT here.
+        ``changes`` is a flat dict of supplied fields keyed for
+        :func:`merge_network_update` (``name``/``vlanId``/``enabled``/
+        ``isolationEnabled``/``internetAccessEnabled``/``subnet``/``gateway``/
+        ``dhcp_start``/``dhcp_stop``/``leaseTimeSeconds``/
+        ``pingConflictDetectionEnabled``/``domainName``). The read-merge-PUT
+        happens inside ``integration_update`` (the shared chokepoint), so a
+        partial edit (e.g. just the prefix) preserves the existing DHCP/L3 config
+        rather than wiping it.
         """
-        data = await self.integration_update("networks", network_id, patch, controller)
+        data = await self.integration_update("networks", network_id, changes, controller)
         return self._normalize_network(data) if data else {}
 
     async def delete_network(self, network_id: str, controller: str | None = None) -> bool:

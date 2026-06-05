@@ -489,6 +489,12 @@ async def unifi_create_network(
     dhcp_stop: Annotated[str | None, Field(description="DHCP range end, e.g. '10.1.40.200'")] = None,
     purpose: Annotated[str, Field(description="Network purpose (corporate, guest, vlan-only)")] = "corporate",
     enabled: Annotated[bool, Field(description="Whether the network is enabled")] = True,
+    lease_seconds: Annotated[int, Field(description="DHCP lease time in seconds (default 86400)")] = 86400,
+    domain_name: Annotated[str, Field(description="DHCP search domain (e.g. 'svc.lan'); omit for none")] = "",
+    dhcp_mode: Annotated[str, Field(description="DHCP mode: 'server' (default) or 'none'")] = "server",
+    ping_conflict: Annotated[bool, Field(description="DHCP ping conflict detection (default true)")] = True,
+    isolated: Annotated[bool, Field(description="Isolate this network (no inter-VLAN routing)")] = False,
+    internet_access: Annotated[bool, Field(description="Allow internet access (default true)")] = True,
     controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
     confirm: Annotated[bool, Field(description="Must be true to confirm — creates a network/VLAN")] = False,
 ) -> str:
@@ -508,6 +514,12 @@ async def unifi_create_network(
             dhcp_stop=dhcp_stop,
             purpose=purpose,
             enabled=enabled,
+            lease_seconds=lease_seconds,
+            domain_name=domain_name,
+            dhcp_mode=dhcp_mode,
+            ping_conflict=ping_conflict,
+            isolated=isolated,
+            internet_access=internet_access,
         )
         net = await _get_client().create_network(spec, controller)
         return f"Created network '{name}' (vlan {vlan_id})\n{format_network_detail(net)}"
@@ -523,30 +535,62 @@ async def unifi_update_network(
     subnet: Annotated[str | None, Field(description="New CIDR, e.g. '10.1.40.254/24'")] = None,
     gateway: Annotated[str | None, Field(description="New gateway IP")] = None,
     enabled: Annotated[bool | None, Field(description="Enable/disable the network")] = None,
+    dhcp_start: Annotated[str | None, Field(description="New DHCP range start, e.g. '10.1.40.100'")] = None,
+    dhcp_stop: Annotated[str | None, Field(description="New DHCP range end, e.g. '10.1.40.200'")] = None,
+    lease_seconds: Annotated[int | None, Field(description="New DHCP lease time in seconds")] = None,
+    domain_name: Annotated[str | None, Field(description="New DHCP search domain (e.g. 'svc.lan')")] = None,
+    ping_conflict: Annotated[bool | None, Field(description="Toggle DHCP ping conflict detection")] = None,
+    isolated: Annotated[bool | None, Field(description="Isolate this network (no inter-VLAN routing)")] = None,
+    internet_access: Annotated[bool | None, Field(description="Allow internet access")] = None,
     controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
     confirm: Annotated[bool, Field(description="Must be true to confirm — modifies a network/VLAN")] = False,
 ) -> str:
-    """Update a network/VLAN (only supplied fields). Requires UNIFI_API_KEY, UNIFI_WRITE_ENABLED=true, confirm=true."""
+    """Update a network/VLAN (only supplied fields, read-merge-write so omitted fields are preserved).
+
+    Requires UNIFI_API_KEY, UNIFI_WRITE_ENABLED=true, confirm=true.
+    """
     gate = _write_gate(controller)
     if gate:
         return gate
     if not confirm:
         return "Error: Set confirm=true to update this network/VLAN."
-    patch: dict[str, object] = {}
+    # Build a flat `changes` dict keyed for merge_network_update (models.py). The
+    # client GETs the current network and deep-merges these in, so omitted fields
+    # are preserved (no DHCP/L3 wipe). subnet/gateway map to the nested
+    # ipv4Configuration.hostIpAddress/prefixLength — NOT the legacy ipSubnet keys.
+    changes: dict[str, object] = {}
     if name is not None:
-        patch["name"] = name
+        changes["name"] = name
     if vlan_id is not None:
-        patch["vlanId"] = vlan_id
+        changes["vlanId"] = vlan_id
     if subnet is not None:
-        patch["ipSubnet"] = subnet
+        changes["subnet"] = subnet
     if gateway is not None:
-        patch["gatewayIp"] = gateway
+        changes["gateway"] = gateway
     if enabled is not None:
-        patch["enabled"] = enabled
-    if not patch:
-        return "Error: No fields to update — supply at least one of name/vlan_id/subnet/gateway/enabled."
+        changes["enabled"] = enabled
+    if dhcp_start is not None:
+        changes["dhcp_start"] = dhcp_start
+    if dhcp_stop is not None:
+        changes["dhcp_stop"] = dhcp_stop
+    if lease_seconds is not None:
+        changes["leaseTimeSeconds"] = lease_seconds
+    if domain_name is not None:
+        changes["domainName"] = domain_name
+    if ping_conflict is not None:
+        changes["pingConflictDetectionEnabled"] = ping_conflict
+    if isolated is not None:
+        changes["isolationEnabled"] = isolated
+    if internet_access is not None:
+        changes["internetAccessEnabled"] = internet_access
+    if not changes:
+        return (
+            "Error: No fields to update — supply at least one of "
+            "name/vlan_id/subnet/gateway/enabled/dhcp_start/dhcp_stop/lease_seconds/"
+            "domain_name/ping_conflict/isolated/internet_access."
+        )
     try:
-        net = await _get_client().update_network(network_id, patch, controller)
+        net = await _get_client().update_network(network_id, changes, controller)
         return f"Updated network {network_id}\n{format_network_detail(net)}"
     except UniFiError as e:
         return _error_response(e)
