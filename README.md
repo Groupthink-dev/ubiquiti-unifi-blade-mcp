@@ -69,12 +69,44 @@ The API key is generated **on the UniFi console UI** (not via this MCP). Ubiquit
 1. Open the UniFi Network application (the local console UI at `https://<controller-ip>`, or via `unifi.ui.com` → your console).
 2. **Settings** (gear icon) → **Control Plane** → **Integrations**.
    *(On some 10.x builds this appears as Settings → **System** → **Integrations**, or **Admins & Users** → **API Keys** — if "Control Plane" isn't present, look for "Integrations" or "API" anywhere under Settings → System.)*
-3. Click **Create API Key**, give it a name (e.g. `blade-mcp`), and **copy the key immediately** — it is shown **only once**.
-4. The key is account- and site-scoped; store it in your secrets manager and set it as `UNIFI_API_KEY`.
+3. Click **Create API Key**, give it a name (e.g. `blade-mcp`), set expiry to **Never Expires**, and click **Create**.
+
+   ![Create API Key form](docs/screenshots/unifi-create-api-key.png)
+
+4. **Copy the key immediately** — it is shown **only once**.
+
+   ![API Key Created — copy now](docs/screenshots/unifi-api-key-created.png)
+
+5. Store the key in your secrets manager and set it as `UNIFI_API_KEY`.
 
 > **Verify scope before relying on writes:** the key inherits your admin role. A read-only/viewer admin yields a key that will `403` on create/update/delete. Use a Full-Management / Super Admin account if you need VLAN/firewall writes.
 >
 > **If the menu doesn't match:** open the console's built-in API reference (linked from the Integrations page) — it always reflects *your* installed version, and is the authoritative source when this doc has aged. Requires UniFi Network **9.0+** (full network/VLAN/firewall CRUD confirmed on **10.x**).
+
+### Creating dedicated local admins for session (monitoring) tools
+
+The monitoring tools authenticate via username/password. Rather than using your personal super-admin account, create **dedicated local admins** restricted to the controller. The write-gated mutation tools (block client, restart device, toggle WLAN) need a higher role than Viewer, so it's worth creating two accounts:
+
+| Account | Username | Role | Use when |
+|---------|----------|------|----------|
+| `Ro MCP` | `mcp-ro` | Viewer | `UNIFI_WRITE_ENABLED` unset / read-only agents |
+| `Rw MCP` | `mcp-rw` | Network Admin (or Full Access) | `UNIFI_WRITE_ENABLED=true` |
+
+**Steps (repeat for each account):**
+
+1. **Settings** → **Admins & Users** → **Admin Permissions** → **Create New**.
+2. Set **First Name** / **Last Name** to `Ro MCP` or `Rw MCP`.
+3. Check **Restrict to Local Access Only** — prevents the account from authenticating at `unifi.ui.com`.
+4. Check **Use a Predefined Role** and select the appropriate role (Viewer for read-only; Network Admin or Full Access for read-write).
+5. Set a strong password and click **Create**.
+
+   ![Create local admin user for MCP](docs/screenshots/unifi-create-local-user.png)
+
+6. Verify the created profile in the admin list — confirm **Restrict to Local Access Only** is on and the role is correct.
+
+   ![Completed mcp-rw user profile](docs/screenshots/unifi-local-user-profile.png)
+
+7. Set `UNIFI_USERNAME` and `UNIFI_PASSWORD` to the account's credentials. Use the `mcp-ro` credentials by default; switch to `mcp-rw` only for sessions where `UNIFI_WRITE_ENABLED=true`.
 
 ## 29 tools, 7 categories
 

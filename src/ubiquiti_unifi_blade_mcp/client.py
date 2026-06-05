@@ -96,6 +96,11 @@ class UniFiClient:
         self._configs = parse_controllers()
         self._controllers: dict[str, Controller] = {}
         self._sessions: dict[str, aiohttp.ClientSession] = {}
+        # Integration-API (X-API-KEY) sessions are kept *separate* from the
+        # aiounifi cookie-login sessions above. They use a DummyCookieJar so the
+        # X-API-KEY header is the sole credential on every request — see
+        # _ensure_integration_session for why this isolation matters.
+        self._integration_sessions: dict[str, aiohttp.ClientSession] = {}
         self._connected: set[str] = set()
         # Cache of Integration-API site UUIDs (distinct from the short site name)
         self._site_ids: dict[str, str] = {}
@@ -133,10 +138,31 @@ class UniFiClient:
         return False
 
     def _ensure_session(self, name: str) -> aiohttp.ClientSession:
-        """Get or create the per-controller aiohttp session (shared by both auth modes)."""
+        """Get or create the per-controller aiounifi (cookie/CSRF) session."""
         if name not in self._sessions or self._sessions[name].closed:
             self._sessions[name] = aiohttp.ClientSession()
         return self._sessions[name]
+
+    def _ensure_integration_session(self, name: str) -> aiohttp.ClientSession:
+        """Get or create the per-controller Integration-API (X-API-KEY) session.
+
+        Deliberately a *different* session from :meth:`_ensure_session`, with a
+        :class:`aiohttp.DummyCookieJar` so it never stores or replays cookies.
+
+        Why this matters: a controller commonly carries *both* session creds and
+        an api_key. The aiounifi login on the cookie session populates the jar
+        with ``unifises``/CSRF cookies. If the Integration API shared that jar,
+        those cookies would ride along on every X-API-KEY request — and UniFi OS,
+        seeing a session cookie, validates *that* and (once it goes stale) returns
+        ``401 api.authentication.missing-credentials`` while ignoring the
+        X-API-KEY header. A 4xx ``Set-Cookie`` could similarly poison the jar.
+        Isolating the transport guarantees X-API-KEY is the sole credential and a
+        failed write can never corrupt the API-key read path.
+        """
+        existing = self._integration_sessions.get(name)
+        if existing is None or existing.closed:
+            self._integration_sessions[name] = aiohttp.ClientSession(cookie_jar=aiohttp.DummyCookieJar())
+        return self._integration_sessions[name]
 
     async def _get_controller(self, controller: str | None = None) -> Controller:
         """Get or create an aiounifi Controller for the given controller."""
@@ -194,11 +220,12 @@ class UniFiClient:
             raise UniFiError(_scrub(f"Controller error: {e}")) from e
 
     async def close(self) -> None:
-        """Close all sessions."""
-        for session in self._sessions.values():
+        """Close all sessions (both the aiounifi cookie sessions and the X-API-KEY sessions)."""
+        for session in (*self._sessions.values(), *self._integration_sessions.values()):
             if not session.closed:
                 await session.close()
         self._sessions.clear()
+        self._integration_sessions.clear()
         self._controllers.clear()
         self._connected.clear()
 
@@ -623,7 +650,7 @@ class UniFiClient:
                 f"(or UNIFI_{config.name.upper()}_API_KEY) to use network/VLAN tools."
             )
 
-        session = self._ensure_session(config.name)
+        session = self._ensure_integration_session(config.name)
         url = f"https://{config.host}:{config.port}/{_INTEGRATION_BASE}/{path.lstrip('/')}"
         headers = {"X-API-KEY": config.api_key, "Accept": "application/json"}
         if json_body is not None:
@@ -639,7 +666,36 @@ class UniFiClient:
             ) as resp:
                 text = await resp.text()
                 if resp.status in (401, 403):
-                    raise AuthError(_scrub(f"Integration API auth failed ({resp.status}): {text}"))
+                    # Diagnostic: record controller/method/path/status and whether the
+                    # X-API-KEY header was actually sent — never the value. Lets a future
+                    # occurrence disambiguate a client-side credential drop from a
+                    # server-side rejection. (DD-343 follow-up; 2026-06-05.)
+                    logger.warning(
+                        "Integration API %s on '%s' %s %s (X-API-KEY sent=%s)",
+                        resp.status,
+                        config.name,
+                        method.upper(),
+                        path,
+                        bool(headers.get("X-API-KEY")),
+                    )
+                    if resp.status == 403:
+                        # Authenticated but not permitted — almost always a Viewer /
+                        # read-only API key. The session/cookie path is unaffected.
+                        raise AuthError(
+                            _scrub(
+                                f"Integration API forbidden (403) on controller '{config.name}': the "
+                                "API key authenticated but lacks write permission for this resource. "
+                                "Regenerate it with an Admin role (UniFi → Settings → Admins → API Keys). "
+                                f"Server said: {text}"
+                            )
+                        )
+                    raise AuthError(
+                        _scrub(
+                            f"Integration API unauthorized (401) on controller '{config.name}': the "
+                            "API key is missing, invalid, or not accepted. Check UNIFI_API_KEY "
+                            f"(or UNIFI_{config.name.upper()}_API_KEY). Server said: {text}"
+                        )
+                    )
                 if resp.status == 404:
                     raise NotFoundError(_scrub(f"Integration API resource not found ({resp.status}): {text}"))
                 if resp.status >= 400:

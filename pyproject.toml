@@ -1,6 +1,6 @@
 [project]
 name = "ubiquiti-unifi-blade-mcp"
-version = "0.5.0"
+version = "0.5.1"
 description = "Ubiquiti UniFi MCP Server — monitoring, security, and full Integration-API resource management (networks/VLANs, WiFi, firewall, ACL, DNS, vouchers)"
 readme = "README.md"
 license = {text = "MIT"}
