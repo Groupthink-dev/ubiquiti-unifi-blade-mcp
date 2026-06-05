@@ -269,9 +269,24 @@ class TestMergeNetworkUpdate:
             "leaseTimeSeconds": 86400,
             "pingConflictDetectionEnabled": True,
         }
-        # Server-managed keys preserved.
+        # Mutable server-managed key preserved.
         assert merged["mdnsForwardingEnabled"] is True
-        assert merged["metadata"] == {"zone": "internal"}
+        # Read-only keys (id/metadata/default) STRIPPED — the live PUT rejects them
+        # ("Unknown request body property '$.id'/'$.metadata'/'$.default'").
+        assert "metadata" not in merged
+        assert "id" not in merged
+
+    def test_strips_readonly_keys_rejected_by_put(self) -> None:
+        # Live Network 10.x PUT rejects id/metadata/default echoed from the GET
+        # (paddington 2026-06-06). The merge MUST strip them; mdns stays (mutable).
+        base = self._full_network()
+        base["default"] = False
+        merged = merge_network_update(base, {"dhcp_start": "10.1.40.50"})
+        for ro in ("id", "metadata", "default"):
+            assert ro not in merged, f"{ro} must be stripped before PUT"
+        assert merged["mdnsForwardingEnabled"] is True
+        # the actual edit still applied
+        assert merged["ipv4Configuration"]["dhcpConfiguration"]["ipAddressRange"]["start"] == "10.1.40.50"  # type: ignore[index]
 
     def test_does_not_mutate_base(self) -> None:
         base = self._full_network()

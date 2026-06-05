@@ -128,6 +128,11 @@ _MANAGEMENT_BY_PURPOSE = {
     "routed": "GATEWAY",
 }
 
+# Server-managed read-only keys present in a GET network object that the
+# Integration-API PUT rejects ("Unknown request body property '$.<key>'").
+# merge_network_update() strips these from the read-merged body before PUT.
+_NETWORK_READONLY_KEYS = ("id", "metadata", "default")
+
 
 def _parse_host_and_prefix(subnet: str | None, gateway: str | None) -> tuple[str | None, int | None]:
     """Resolve (hostIpAddress, prefixLength) from a CIDR ``subnet`` and/or ``gateway``.
@@ -307,6 +312,15 @@ def merge_network_update(base: dict[str, object], changes: dict[str, object]) ->
                     dhcp[api_key] = value
             ipv4["dhcpConfiguration"] = dhcp
         merged["ipv4Configuration"] = ipv4
+
+    # The Integration-API PUT replaces the whole object but REJECTS server-managed
+    # read-only keys echoed back in the body (live Network 10.x: 400
+    # api.request.unknown-property "Unknown request body property '$.id'", then
+    # '$.metadata', then '$.default'). The GET we merge from carries them, so strip
+    # them before PUT. (mdnsForwardingEnabled IS mutable — keep it.) Verified live
+    # on paddington 2026-06-06; the mocked suite could not surface this — see DD-382.
+    for ro_key in _NETWORK_READONLY_KEYS:
+        merged.pop(ro_key, None)
 
     return merged
 
