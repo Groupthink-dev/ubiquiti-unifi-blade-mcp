@@ -113,13 +113,20 @@ class TestNetworkSpec:
         assert spec["management"] == "GATEWAY"
         assert spec["name"] == "Services"
         assert spec["vlanId"] == 40
+        # Required non-null GATEWAY scalars.
+        assert spec["isolationEnabled"] is False
+        assert spec["cellularBackupEnabled"] is False
+        assert spec["internetAccessEnabled"] is True
         ipv4 = spec["ipv4Configuration"]
         assert ipv4 == {
+            "autoScaleEnabled": False,
             "hostIpAddress": "10.1.40.254",
             "prefixLength": 24,
             "dhcpConfiguration": {
                 "mode": "SERVER",
                 "ipAddressRange": {"start": "10.1.40.100", "stop": "10.1.40.200"},
+                "leaseTimeSeconds": 86400,
+                "pingConflictDetectionEnabled": True,
             },
         }
         # Legacy flat keys are gone.
@@ -133,12 +140,25 @@ class TestNetworkSpec:
 
     def test_minimal_spec_defaults_to_gateway(self) -> None:
         spec = network_spec_from_args("Guest", 30)
-        # Default purpose=corporate -> GATEWAY; no subnet -> no ipv4Configuration emitted.
-        assert spec == {"management": "GATEWAY", "name": "Guest", "enabled": True, "vlanId": 30}
+        # Default purpose=corporate -> GATEWAY; no subnet -> no ipv4Configuration emitted,
+        # but the required non-null GATEWAY scalars are still present.
+        assert spec == {
+            "management": "GATEWAY",
+            "name": "Guest",
+            "enabled": True,
+            "vlanId": 30,
+            "isolationEnabled": False,
+            "cellularBackupEnabled": False,
+            "internetAccessEnabled": True,
+        }
 
     def test_gateway_subnet_host_used_when_no_gateway_arg(self) -> None:
         spec = network_spec_from_args("S", 5, subnet="10.0.5.1/24")
-        assert spec["ipv4Configuration"] == {"hostIpAddress": "10.0.5.1", "prefixLength": 24}
+        assert spec["ipv4Configuration"] == {
+            "autoScaleEnabled": False,
+            "hostIpAddress": "10.0.5.1",
+            "prefixLength": 24,
+        }
 
     def test_partial_dhcp_omitted(self) -> None:
         # Only one of start/stop -> no dhcpConfiguration emitted.

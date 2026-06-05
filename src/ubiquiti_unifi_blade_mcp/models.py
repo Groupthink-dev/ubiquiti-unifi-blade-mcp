@@ -165,12 +165,14 @@ def network_spec_from_args(
 
     - **UNMANAGED** (``purpose='vlan-only'``): ``{management, name, enabled, vlanId}``
       — a VLAN tag with no L3. Verified live (create→delete) on Network 10.x.
-    - **GATEWAY** (``purpose='corporate'/'guest'``): the above plus a nested
-      ``ipv4Configuration`` (``hostIpAddress`` + ``prefixLength``, optional
-      ``dhcpConfiguration`` with ``mode=SERVER`` + ``ipAddressRange``). The
-      remaining GATEWAY fields seen on reads (``zoneId``, ``internetAccessEnabled``,
-      …) are server-defaulted on create. The GATEWAY create payload is best-effort
-      pending a live create→delete verification; UNMANAGED is the proven path.
+    - **GATEWAY** (``purpose='corporate'/'guest'``): the above plus required
+      non-null scalars (``isolationEnabled``, ``cellularBackupEnabled``,
+      ``internetAccessEnabled``) and a nested ``ipv4Configuration``
+      (``autoScaleEnabled`` + ``hostIpAddress`` + ``prefixLength``, optional
+      ``dhcpConfiguration`` with ``mode=SERVER`` + ``ipAddressRange`` +
+      ``leaseTimeSeconds`` + ``pingConflictDetectionEnabled``). Verified live
+      (create→delete with DHCP) on Network 10.x; the API rejects null on any of
+      those required fields. Conservative defaults are applied for the scalars.
 
     This builder is the single adjustment point — callers and tests read its output.
     """
@@ -183,13 +185,28 @@ def network_spec_from_args(
         # VLAN-only networks carry no L3 configuration — nothing further to add.
         return spec
 
+    # GATEWAY (routed) networks require these scalar fields on create — the API
+    # rejects null (verified live on Network 10.x 2026-06-06: "isolationEnabled
+    # must not be null", etc.). Conservative defaults for a new network.
+    spec["isolationEnabled"] = False
+    spec["cellularBackupEnabled"] = False
+    spec["internetAccessEnabled"] = True
+
     host_ip, prefix = _parse_host_and_prefix(subnet, gateway)
     if host_ip and prefix is not None:
-        ipv4: dict[str, object] = {"hostIpAddress": host_ip, "prefixLength": prefix}
+        ipv4: dict[str, object] = {
+            "autoScaleEnabled": False,  # required, non-null
+            "hostIpAddress": host_ip,
+            "prefixLength": prefix,
+        }
         if dhcp_start and dhcp_stop:
+            # leaseTimeSeconds + pingConflictDetectionEnabled are required (non-null)
+            # whenever a dhcpConfiguration is present.
             ipv4["dhcpConfiguration"] = {
                 "mode": "SERVER",
                 "ipAddressRange": {"start": dhcp_start, "stop": dhcp_stop},
+                "leaseTimeSeconds": 86400,
+                "pingConflictDetectionEnabled": True,
             }
         spec["ipv4Configuration"] = ipv4
     return spec
