@@ -110,6 +110,43 @@ def parse_controllers() -> list[ControllerConfig]:
     ]
 
 
+# Friendly ``purpose`` argument → Integration-API ``management`` enum value.
+# The Integration API does NOT use the legacy aiounifi "purpose"
+# (corporate/guest/vlan-only) string. It keys networks on ``management``, with
+# two observed values: ``UNMANAGED`` (a VLAN-only / switch-only tag, no L3) and
+# ``GATEWAY`` (a routed L3 network with an ``ipv4Configuration``). Captured live
+# against Network 10.x on 2026-06-06. Raw ``management`` values are also accepted.
+_MANAGEMENT_BY_PURPOSE = {
+    "vlan-only": "UNMANAGED",
+    "vlan_only": "UNMANAGED",
+    "vlanonly": "UNMANAGED",
+    "unmanaged": "UNMANAGED",
+    "corporate": "GATEWAY",
+    "gateway": "GATEWAY",
+    "guest": "GATEWAY",
+    "routed": "GATEWAY",
+}
+
+
+def _parse_host_and_prefix(subnet: str | None, gateway: str | None) -> tuple[str | None, int | None]:
+    """Resolve (hostIpAddress, prefixLength) from a CIDR ``subnet`` and/or ``gateway``.
+
+    ``subnet`` is the gateway-host CIDR (e.g. ``10.1.40.254/24``): its host part is
+    the L3 gateway address and its suffix is the prefix length. An explicit
+    ``gateway`` overrides the host part. Returns ``(None, None)`` when no usable
+    address/prefix can be derived.
+    """
+    host_ip = gateway
+    prefix: int | None = None
+    if subnet:
+        ip_part, _, prefix_part = subnet.partition("/")
+        if ip_part and host_ip is None:
+            host_ip = ip_part.strip()
+        if prefix_part.strip().isdigit():
+            prefix = int(prefix_part.strip())
+    return host_ip, prefix
+
+
 def network_spec_from_args(
     name: str,
     vlan_id: int | None,
@@ -123,28 +160,38 @@ def network_spec_from_args(
 ) -> dict[str, object]:
     """Assemble an Integration-API ``networks`` payload from flat tool arguments.
 
-    Returns the camelCase body for ``POST /proxy/network/integration/v1/sites/{id}/networks``.
+    Returns the body for ``POST /proxy/network/integration/v1/sites/{id}/networks``,
+    matching the live Network 10.x Integration-API schema (captured 2026-06-06):
 
-    NOTE (Phase 0): the exact field names for a *routed/corporate* VLAN on
-    Network 10.4.x must be confirmed against the on-console Integration API
-    schema (Settings → Control Plane → Integrations). Community docs firmly
-    establish only the UNMANAGED shape (``{management, name, enabled, vlanId}``).
-    This builder is the single adjustment point — update the keys here once the
-    live schema is captured; callers and tests do not change.
+    - **UNMANAGED** (``purpose='vlan-only'``): ``{management, name, enabled, vlanId}``
+      — a VLAN tag with no L3. Verified live (create→delete) on Network 10.x.
+    - **GATEWAY** (``purpose='corporate'/'guest'``): the above plus a nested
+      ``ipv4Configuration`` (``hostIpAddress`` + ``prefixLength``, optional
+      ``dhcpConfiguration`` with ``mode=SERVER`` + ``ipAddressRange``). The
+      remaining GATEWAY fields seen on reads (``zoneId``, ``internetAccessEnabled``,
+      …) are server-defaulted on create. The GATEWAY create payload is best-effort
+      pending a live create→delete verification; UNMANAGED is the proven path.
+
+    This builder is the single adjustment point — callers and tests read its output.
     """
-    spec: dict[str, object] = {"name": name, "enabled": enabled}
+    management = _MANAGEMENT_BY_PURPOSE.get((purpose or "").strip().lower(), "GATEWAY")
+    spec: dict[str, object] = {"management": management, "name": name, "enabled": enabled}
     if vlan_id is not None:
         spec["vlanId"] = vlan_id
-    if purpose:
-        spec["purpose"] = purpose
-    if subnet:
-        spec["ipSubnet"] = subnet
-    if gateway:
-        spec["gatewayIp"] = gateway
-    if dhcp_start and dhcp_stop:
-        spec["dhcpEnabled"] = True
-        spec["dhcpStart"] = dhcp_start
-        spec["dhcpStop"] = dhcp_stop
+
+    if management == "UNMANAGED":
+        # VLAN-only networks carry no L3 configuration — nothing further to add.
+        return spec
+
+    host_ip, prefix = _parse_host_and_prefix(subnet, gateway)
+    if host_ip and prefix is not None:
+        ipv4: dict[str, object] = {"hostIpAddress": host_ip, "prefixLength": prefix}
+        if dhcp_start and dhcp_stop:
+            ipv4["dhcpConfiguration"] = {
+                "mode": "SERVER",
+                "ipAddressRange": {"start": dhcp_start, "stop": dhcp_stop},
+            }
+        spec["ipv4Configuration"] = ipv4
     return spec
 
 

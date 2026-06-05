@@ -100,7 +100,8 @@ class TestApiKeyConfig:
 
 
 class TestNetworkSpec:
-    def test_full_spec(self) -> None:
+    def test_full_gateway_spec(self) -> None:
+        # purpose=corporate -> management=GATEWAY with nested ipv4Configuration.
         spec = network_spec_from_args(
             "Services",
             40,
@@ -109,24 +110,40 @@ class TestNetworkSpec:
             dhcp_start="10.1.40.100",
             dhcp_stop="10.1.40.200",
         )
+        assert spec["management"] == "GATEWAY"
         assert spec["name"] == "Services"
         assert spec["vlanId"] == 40
-        assert spec["purpose"] == "corporate"
-        assert spec["ipSubnet"] == "10.1.40.254/24"
-        assert spec["gatewayIp"] == "10.1.40.254"
-        assert spec["dhcpEnabled"] is True
-        assert spec["dhcpStart"] == "10.1.40.100"
-        assert spec["dhcpStop"] == "10.1.40.200"
+        ipv4 = spec["ipv4Configuration"]
+        assert ipv4 == {
+            "hostIpAddress": "10.1.40.254",
+            "prefixLength": 24,
+            "dhcpConfiguration": {
+                "mode": "SERVER",
+                "ipAddressRange": {"start": "10.1.40.100", "stop": "10.1.40.200"},
+            },
+        }
+        # Legacy flat keys are gone.
+        assert "purpose" not in spec
+        assert "ipSubnet" not in spec
 
-    def test_minimal_spec(self) -> None:
+    def test_vlan_only_spec_is_unmanaged_no_l3(self) -> None:
+        # purpose=vlan-only -> management=UNMANAGED, no ipv4Configuration (the proven probe shape).
+        spec = network_spec_from_args("zz-probe", 4090, purpose="vlan-only", enabled=False)
+        assert spec == {"management": "UNMANAGED", "name": "zz-probe", "enabled": False, "vlanId": 4090}
+
+    def test_minimal_spec_defaults_to_gateway(self) -> None:
         spec = network_spec_from_args("Guest", 30)
-        assert spec == {"name": "Guest", "enabled": True, "vlanId": 30, "purpose": "corporate"}
+        # Default purpose=corporate -> GATEWAY; no subnet -> no ipv4Configuration emitted.
+        assert spec == {"management": "GATEWAY", "name": "Guest", "enabled": True, "vlanId": 30}
+
+    def test_gateway_subnet_host_used_when_no_gateway_arg(self) -> None:
+        spec = network_spec_from_args("S", 5, subnet="10.0.5.1/24")
+        assert spec["ipv4Configuration"] == {"hostIpAddress": "10.0.5.1", "prefixLength": 24}
 
     def test_partial_dhcp_omitted(self) -> None:
-        # Only one of start/stop -> no DHCP keys emitted.
-        spec = network_spec_from_args("X", 5, dhcp_start="10.0.5.100")
-        assert "dhcpEnabled" not in spec
-        assert "dhcpStart" not in spec
+        # Only one of start/stop -> no dhcpConfiguration emitted.
+        spec = network_spec_from_args("X", 5, subnet="10.0.5.1/24", dhcp_start="10.0.5.100")
+        assert "dhcpConfiguration" not in spec["ipv4Configuration"]  # type: ignore[operator]
 
 
 class TestWriteGate:
