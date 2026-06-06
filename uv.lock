@@ -1683,6 +1683,18 @@ wheels = [
 ]
 
 [[package]]
+name = "stallari-mcp-helpers"
+version = "0.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyyaml" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f0/9d/f253b0f2347ffc4263a024b35172eb171f6c64bd4596451fe7bbfd61248a/stallari_mcp_helpers-0.3.0.tar.gz", hash = "sha256:9f990f339e24641b34f532f9651a618d7b1933f879b90eb0b9b1625fe241bd12", size = 70183, upload-time = "2026-05-24T06:07:32.688Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/df/b9/afcf137c959b4b5cc01d9fdf8ec86781dd9164700042d59ac5ec11e8097c/stallari_mcp_helpers-0.3.0-py3-none-any.whl", hash = "sha256:2f77a933ff6bc0414077eb7baa4eee77c7220735f6356e383dfcf28e936a7b99", size = 19491, upload-time = "2026-05-24T06:07:31.174Z" },
+]
+
+[[package]]
 name = "starlette"
 version = "1.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1717,7 +1729,7 @@ wheels = [
 
 [[package]]
 name = "ubiquiti-unifi-blade-mcp"
-version = "0.6.1"
+version = "0.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -1725,6 +1737,7 @@ dependencies = [
     { name = "fastmcp" },
     { name = "httpx" },
     { name = "pydantic" },
+    { name = "stallari-mcp-helpers" },
 ]
 
 [package.dev-dependencies]
@@ -1747,6 +1760,7 @@ requires-dist = [
     { name = "fastmcp", specifier = ">=2.0.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "stallari-mcp-helpers", specifier = ">=0.3.0,<1.0.0" },
 ]
 
 [package.metadata.requires-dev]

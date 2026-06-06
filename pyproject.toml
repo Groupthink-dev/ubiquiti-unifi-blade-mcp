@@ -1,6 +1,6 @@
 [project]
 name = "ubiquiti-unifi-blade-mcp"
-version = "0.6.1"
+version = "0.7.0"
 description = "Ubiquiti UniFi MCP Server — monitoring, security, and full Integration-API resource management (networks/VLANs, WiFi, firewall, ACL, DNS, vouchers)"
 readme = "README.md"
 license = {text = "MIT"}
@@ -21,6 +21,7 @@ dependencies = [
     "aiohttp>=3.9.0",
     "httpx>=0.28.1",
     "pydantic>=2.0.0",
+    "stallari-mcp-helpers>=0.3.0,<1.0.0",
 ]
 
 [dependency-groups]

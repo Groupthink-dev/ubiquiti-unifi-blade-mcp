@@ -6,8 +6,10 @@ compact output, null-field omission, one line per item.
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
+from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Literal
 
 from fastmcp import FastMCP
@@ -31,6 +33,8 @@ from ubiquiti_unifi_blade_mcp.formatters import (
     format_traffic_routes,
     format_traffic_rules,
     format_wlan_list,
+    mark_call_start,
+    meta_tail,
 )
 from ubiquiti_unifi_blade_mcp.models import network_spec_from_args, require_write
 
@@ -134,12 +138,24 @@ def _write_gate(controller: str | None) -> str | None:
     return None
 
 
+def _audited(fn: Callable[..., Awaitable[str]]) -> Callable[..., Awaitable[str]]:
+    """Stamp call-start so each tool's ``meta_tail`` reports real latency."""
+
+    @functools.wraps(fn)
+    async def wrapper(*args: Any, **kwargs: Any) -> str:
+        mark_call_start()
+        return await fn(*args, **kwargs)
+
+    return wrapper
+
+
 # ===========================================================================
 # INFO & SITES
 # ===========================================================================
 
 
 @mcp.tool()
+@_audited
 async def unifi_controllers() -> str:
     """List the UniFi controllers (consoles) this server is configured for.
 
@@ -154,29 +170,31 @@ async def unifi_controllers() -> str:
         return "No controllers configured."
     lines = [f"{c['name']}{' (default)' if c['default'] else ''} — {c['host']}" for c in summary]
     suffix = "" if len(summary) == 1 else "\n\nPass controller=<name> to target one; mutations require it."
-    return "\n".join(lines) + suffix
+    return meta_tail("\n".join(lines) + suffix, len(summary))
 
 
 @mcp.tool()
+@_audited
 async def unifi_info(
     controller: Annotated[str | None, Field(description="Controller name (omit for all controllers)")] = None,
 ) -> str:
     """Health check: controller version, hostname, site, device count, client count, write gate."""
     try:
         info = await _get_client().info(controller)
-        return format_info(info)
+        return meta_tail(format_info(info), 1)
     except UniFiError as e:
         return _error_response(e)
 
 
 @mcp.tool()
+@_audited
 async def unifi_sites(
     controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """List sites on the controller."""
     try:
         sites = await _get_client().get_sites(controller)
-        return format_sites(sites)
+        return meta_tail(format_sites(sites), len(sites))
     except UniFiError as e:
         return _error_response(e)
 
@@ -187,18 +205,20 @@ async def unifi_sites(
 
 
 @mcp.tool()
+@_audited
 async def unifi_networks(
     controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """List networks/VLANs: name, VLAN id, enabled/disabled, purpose, subnet. Requires UNIFI_API_KEY."""
     try:
         networks = await _get_client().get_networks(controller)
-        return format_network_list(networks)
+        return meta_tail(format_network_list(networks), len(networks))
     except UniFiError as e:
         return _error_response(e)
 
 
 @mcp.tool()
+@_audited
 async def unifi_network(
     network_id: Annotated[str, Field(description="Network ID (from unifi_networks)")],
     controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
@@ -208,7 +228,7 @@ async def unifi_network(
         network = await _get_client().get_network(network_id, controller)
         if network is None:
             return f"Error: Network {network_id} not found"
-        return format_network_detail(network)
+        return meta_tail(format_network_detail(network), 1)
     except UniFiError as e:
         return _error_response(e)
 
@@ -219,18 +239,20 @@ async def unifi_network(
 
 
 @mcp.tool()
+@_audited
 async def unifi_devices(
     controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """List all network devices (APs, switches, gateways) with status, model, clients, uptime, firmware."""
     try:
         devices = await _get_client().get_devices(controller)
-        return format_device_list(devices)
+        return meta_tail(format_device_list(devices), len(devices))
     except UniFiError as e:
         return _error_response(e)
 
 
 @mcp.tool()
+@_audited
 async def unifi_device(
     mac: Annotated[str, Field(description="Device MAC address (from unifi_devices)")],
     controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
@@ -240,7 +262,7 @@ async def unifi_device(
         device = await _get_client().get_device(mac, controller)
         if device is None:
             return f"Error: Device {mac} not found"
-        return format_device_detail(device)
+        return meta_tail(format_device_detail(device), 1)
     except UniFiError as e:
         return _error_response(e)
 
@@ -251,18 +273,20 @@ async def unifi_device(
 
 
 @mcp.tool()
+@_audited
 async def unifi_clients(
     controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """List connected clients: name, IP, SSID/wired, signal, experience score, blocked status."""
     try:
         clients = await _get_client().get_clients(controller)
-        return format_client_list(clients)
+        return meta_tail(format_client_list(clients), len(clients))
     except UniFiError as e:
         return _error_response(e)
 
 
 @mcp.tool()
+@_audited
 async def unifi_client(
     mac: Annotated[str, Field(description="Client MAC address (from unifi_clients)")],
     controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
@@ -272,7 +296,7 @@ async def unifi_client(
         client = await _get_client().get_client(mac, controller)
         if client is None:
             return f"Error: Client {mac} not found"
-        return format_client_detail(client)
+        return meta_tail(format_client_detail(client), 1)
     except UniFiError as e:
         return _error_response(e)
 
@@ -283,13 +307,14 @@ async def unifi_client(
 
 
 @mcp.tool()
+@_audited
 async def unifi_wlans(
     controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """List all WLANs (SSIDs): name, enabled/disabled, security type, guest flag."""
     try:
         wlans = await _get_client().get_wlans(controller)
-        return format_wlan_list(wlans)
+        return meta_tail(format_wlan_list(wlans), len(wlans))
     except UniFiError as e:
         return _error_response(e)
 
@@ -300,61 +325,66 @@ async def unifi_wlans(
 
 
 @mcp.tool()
+@_audited
 async def unifi_firewall(
     controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """Firewall policies: name, enabled/disabled, action, source/destination zones."""
     try:
         policies = await _get_client().get_firewall_policies(controller)
-        return format_firewall_policies(policies)
+        return meta_tail(format_firewall_policies(policies), len(policies))
     except UniFiError as e:
         return _error_response(e)
 
 
 @mcp.tool()
+@_audited
 async def unifi_traffic_routes(
     controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """Traffic routes: description, enabled/disabled, matching target."""
     try:
         routes = await _get_client().get_traffic_routes(controller)
-        return format_traffic_routes(routes)
+        return meta_tail(format_traffic_routes(routes), len(routes))
     except UniFiError as e:
         return _error_response(e)
 
 
 @mcp.tool()
+@_audited
 async def unifi_traffic_rules(
     controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """Traffic rules: description, enabled/disabled, action, matching target."""
     try:
         rules = await _get_client().get_traffic_rules(controller)
-        return format_traffic_rules(rules)
+        return meta_tail(format_traffic_rules(rules), len(rules))
     except UniFiError as e:
         return _error_response(e)
 
 
 @mcp.tool()
+@_audited
 async def unifi_port_forwards(
     controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """Port forwarding rules: name, enabled/disabled, protocol, external → internal mapping."""
     try:
         forwards = await _get_client().get_port_forwards(controller)
-        return format_port_forwards(forwards)
+        return meta_tail(format_port_forwards(forwards), len(forwards))
     except UniFiError as e:
         return _error_response(e)
 
 
 @mcp.tool()
+@_audited
 async def unifi_dpi(
     controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
 ) -> str:
     """DPI restriction groups and apps: name, enabled/disabled."""
     try:
         dpi = await _get_client().get_dpi_restrictions(controller)
-        return format_dpi(dpi)
+        return meta_tail(format_dpi(dpi), 1)
     except UniFiError as e:
         return _error_response(e)
 
@@ -365,6 +395,7 @@ async def unifi_dpi(
 
 
 @mcp.tool()
+@_audited
 async def unifi_block_client(
     mac: Annotated[str, Field(description="Client MAC address to block")],
     controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
@@ -378,12 +409,13 @@ async def unifi_block_client(
         return "Error: Set confirm=true to block this client."
     try:
         await _get_client().block_client(mac, controller)
-        return f"Blocked client {mac}"
+        return meta_tail(f"Blocked client {mac}", 1)
     except UniFiError as e:
         return _error_response(e)
 
 
 @mcp.tool()
+@_audited
 async def unifi_unblock_client(
     mac: Annotated[str, Field(description="Client MAC address to unblock")],
     controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
@@ -394,12 +426,13 @@ async def unifi_unblock_client(
         return gate
     try:
         await _get_client().unblock_client(mac, controller)
-        return f"Unblocked client {mac}"
+        return meta_tail(f"Unblocked client {mac}", 1)
     except UniFiError as e:
         return _error_response(e)
 
 
 @mcp.tool()
+@_audited
 async def unifi_reconnect_client(
     mac: Annotated[str, Field(description="Client MAC address to reconnect")],
     controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
@@ -410,12 +443,13 @@ async def unifi_reconnect_client(
         return gate
     try:
         await _get_client().reconnect_client(mac, controller)
-        return f"Reconnecting client {mac}"
+        return meta_tail(f"Reconnecting client {mac}", 1)
     except UniFiError as e:
         return _error_response(e)
 
 
 @mcp.tool()
+@_audited
 async def unifi_toggle_wlan(
     wlan_id: Annotated[str, Field(description="WLAN ID (from unifi_wlans)")],
     enable: Annotated[bool, Field(description="True to enable, false to disable")],
@@ -428,15 +462,16 @@ async def unifi_toggle_wlan(
     try:
         if enable:
             await _get_client().enable_wlan(wlan_id, controller)
-            return f"Enabled WLAN {wlan_id}"
+            return meta_tail(f"Enabled WLAN {wlan_id}", 1)
         else:
             await _get_client().disable_wlan(wlan_id, controller)
-            return f"Disabled WLAN {wlan_id}"
+            return meta_tail(f"Disabled WLAN {wlan_id}", 1)
     except UniFiError as e:
         return _error_response(e)
 
 
 @mcp.tool()
+@_audited
 async def unifi_toggle_traffic_route(
     route_id: Annotated[str, Field(description="Traffic route ID (from unifi_traffic_routes)")],
     enable: Annotated[bool, Field(description="True to enable, false to disable")],
@@ -449,15 +484,16 @@ async def unifi_toggle_traffic_route(
     try:
         if enable:
             await _get_client().enable_traffic_route(route_id, controller)
-            return f"Enabled traffic route {route_id}"
+            return meta_tail(f"Enabled traffic route {route_id}", 1)
         else:
             await _get_client().disable_traffic_route(route_id, controller)
-            return f"Disabled traffic route {route_id}"
+            return meta_tail(f"Disabled traffic route {route_id}", 1)
     except UniFiError as e:
         return _error_response(e)
 
 
 @mcp.tool()
+@_audited
 async def unifi_restart_device(
     mac: Annotated[str, Field(description="Device MAC address (from unifi_devices)")],
     controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
@@ -474,12 +510,13 @@ async def unifi_restart_device(
         return "Error: Set confirm=true to restart. Device will be offline during restart."
     try:
         await _get_client().restart_device(mac, controller)
-        return f"Restarting device {mac}"
+        return meta_tail(f"Restarting device {mac}", 1)
     except UniFiError as e:
         return _error_response(e)
 
 
 @mcp.tool()
+@_audited
 async def unifi_create_network(
     name: Annotated[str, Field(description="Network name (e.g. 'Services')")],
     vlan_id: Annotated[int, Field(description="VLAN ID (e.g. 40); use 0 for the default/untagged network")],
@@ -522,12 +559,13 @@ async def unifi_create_network(
             internet_access=internet_access,
         )
         net = await _get_client().create_network(spec, controller)
-        return f"Created network '{name}' (vlan {vlan_id})\n{format_network_detail(net)}"
+        return meta_tail(f"Created network '{name}' (vlan {vlan_id})\n{format_network_detail(net)}", 1)
     except UniFiError as e:
         return _error_response(e)
 
 
 @mcp.tool()
+@_audited
 async def unifi_update_network(
     network_id: Annotated[str, Field(description="Network ID (from unifi_networks)")],
     name: Annotated[str | None, Field(description="New name")] = None,
@@ -591,12 +629,13 @@ async def unifi_update_network(
         )
     try:
         net = await _get_client().update_network(network_id, changes, controller)
-        return f"Updated network {network_id}\n{format_network_detail(net)}"
+        return meta_tail(f"Updated network {network_id}\n{format_network_detail(net)}", 1)
     except UniFiError as e:
         return _error_response(e)
 
 
 @mcp.tool()
+@_audited
 async def unifi_delete_network(
     network_id: Annotated[str, Field(description="Network ID (from unifi_networks)")],
     controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
@@ -610,7 +649,7 @@ async def unifi_delete_network(
         return "Error: Set confirm=true to delete this network/VLAN. This is permanent."
     try:
         await _get_client().delete_network(network_id, controller)
-        return f"Deleted network {network_id}"
+        return meta_tail(f"Deleted network {network_id}", 1)
     except UniFiError as e:
         return _error_response(e)
 
@@ -626,6 +665,7 @@ async def unifi_delete_network(
 
 
 @mcp.tool()
+@_audited
 async def unifi_resource_list(
     resource: Annotated[ResourceName, Field(description="Integration-API resource to list")],
     controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
@@ -636,12 +676,13 @@ async def unifi_resource_list(
     """
     try:
         items = await _get_client().integration_list(resource, controller)
-        return format_resource_list(items, resource)
+        return meta_tail(format_resource_list(items, resource), len(items))
     except UniFiError as e:
         return _error_response(e)
 
 
 @mcp.tool()
+@_audited
 async def unifi_resource_get(
     resource: Annotated[ResourceName, Field(description="Integration-API resource")],
     item_id: Annotated[str, Field(description="Item id (from unifi_resource_list)")],
@@ -652,12 +693,13 @@ async def unifi_resource_get(
         item = await _get_client().integration_get(resource, item_id, controller)
         if item is None:
             return f"Error: {resource} {item_id} not found"
-        return format_resource_detail(item)
+        return meta_tail(format_resource_detail(item), 1)
     except UniFiError as e:
         return _error_response(e)
 
 
 @mcp.tool()
+@_audited
 async def unifi_resource_create(
     resource: Annotated[ResourceName, Field(description="Integration-API resource (must be writable)")],
     body: Annotated[
@@ -678,12 +720,13 @@ async def unifi_resource_create(
         return f"Error: Set confirm=true to create this {resource} item."
     try:
         created = await _get_client().integration_create(resource, body, controller)
-        return f"Created {resource} item\n{format_resource_detail(created)}"
+        return meta_tail(f"Created {resource} item\n{format_resource_detail(created)}", 1)
     except UniFiError as e:
         return _error_response(e)
 
 
 @mcp.tool()
+@_audited
 async def unifi_resource_update(
     resource: Annotated[ResourceName, Field(description="Integration-API resource (must be writable)")],
     item_id: Annotated[str, Field(description="Item id (from unifi_resource_list)")],
@@ -702,12 +745,13 @@ async def unifi_resource_update(
         return f"Error: Set confirm=true to update this {resource} item."
     try:
         updated = await _get_client().integration_update(resource, item_id, body, controller)
-        return f"Updated {resource} {item_id}\n{format_resource_detail(updated)}"
+        return meta_tail(f"Updated {resource} {item_id}\n{format_resource_detail(updated)}", 1)
     except UniFiError as e:
         return _error_response(e)
 
 
 @mcp.tool()
+@_audited
 async def unifi_resource_delete(
     resource: Annotated[ResourceName, Field(description="Integration-API resource (must be writable)")],
     item_id: Annotated[str, Field(description="Item id (from unifi_resource_list)")],
@@ -722,7 +766,7 @@ async def unifi_resource_delete(
         return f"Error: Set confirm=true to delete this {resource} item. This is permanent."
     try:
         await _get_client().integration_delete(resource, item_id, controller)
-        return f"Deleted {resource} {item_id}"
+        return meta_tail(f"Deleted {resource} {item_id}", 1)
     except UniFiError as e:
         return _error_response(e)
 

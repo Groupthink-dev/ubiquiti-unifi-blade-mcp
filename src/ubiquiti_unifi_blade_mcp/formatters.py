@@ -9,8 +9,40 @@ All formatters return compact strings optimised for LLM consumption:
 
 from __future__ import annotations
 
+import contextvars
 import json
+import time as _time
 from typing import Any
+
+from stallari_mcp_helpers import append_meta as _lib_append_meta
+from stallari_mcp_helpers import meta_envelope as _lib_meta_envelope
+
+_call_started: contextvars.ContextVar[float] = contextvars.ContextVar("_call_started", default=0.0)
+
+
+def mark_call_start() -> None:
+    """Stamp the start of the current tool call (read by :func:`meta_tail`)."""
+    _call_started.set(_time.monotonic())
+
+
+def meta_tail(payload: str, matched_total: int, returned: int | None = None) -> str:
+    """Append the CONV-29 ``_meta`` audit envelope as a JSON tail line.
+
+    UniFi tools do no scope-filtering/pagination, so ``matched_total == returned``
+    and ``filtered_by`` is empty. ``latency_ms`` is derived from the contextvar
+    stamped by :func:`mark_call_start` (0 if unstamped, e.g. in unit tests that
+    call a formatter directly).
+    """
+    t0 = _call_started.get()
+    latency_ms = int((_time.monotonic() - t0) * 1000) if t0 else 0
+    envelope = str(
+        _lib_meta_envelope(
+            matched_total=matched_total,
+            returned=matched_total if returned is None else returned,
+            latency_ms=latency_ms,
+        )
+    )
+    return str(_lib_append_meta(payload, envelope))
 
 
 def _uptime_human(seconds: int | float | None) -> str:
