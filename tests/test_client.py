@@ -230,19 +230,86 @@ class TestNetworkClient:
             "stop": "10.1.40.200",
         }
 
-    async def test_non_networks_resource_update_stays_blind_put(
-        self, mock_env_apikey: None, mocker: MockerFixture
-    ) -> None:
-        # Other resources keep blind-PUT semantics (no GET, raw body forwarded).
+    async def test_non_networks_resource_update_read_merges(self, mock_env_apikey: None, mocker: MockerFixture) -> None:
+        # AUD-04-41: non-networks resources must ALSO read-merge, not blind-PUT.
+        # A partial body (rename only) must preserve every unspecified field of
+        # the live object — action, source/destination zones, nested config.
         client = UniFiClient()
         mocker.patch.object(client, "_resolve_integration_site_id", return_value="S")
-        req = mocker.patch.object(client, "_integration_request", return_value={"id": "z1"})
-        body = {"name": "policy", "action": "ALLOW"}
-        await client.integration_update("firewall_policies", "z1", body)
-        req.assert_awaited_once()
-        call = req.await_args_list[0]
-        assert call.args[0] == "put"
-        assert call.kwargs["json_body"] == body
+        current = {
+            "id": "z1",
+            "name": "Block IoT to LAN",
+            "enabled": True,
+            "action": "BLOCK",
+            "source": {"zoneId": "iot", "matchOppositeProtocol": False},
+            "destination": {"zoneId": "lan"},
+            "loggingEnabled": True,
+        }
+
+        async def fake_request(method: str, path: str, **kwargs: object) -> dict[str, object]:
+            if method == "get":
+                return current
+            return {"id": "z1"}
+
+        req = mocker.patch.object(client, "_integration_request", side_effect=fake_request)
+        # Caller supplies a bare partial body (the blind-PUT field-wipe hazard shape).
+        await client.integration_update("firewall_policies", "z1", {"name": "Block IoT to LAN v2"})
+
+        get_call, put_call = req.await_args_list
+        assert get_call.args[0] == "get"
+        assert get_call.args[1] == "sites/S/firewall/policies/z1"
+        assert put_call.args[0] == "put"
+        assert put_call.args[1] == "sites/S/firewall/policies/z1"
+        put_body = put_call.kwargs["json_body"]
+        # The edit applied…
+        assert put_body["name"] == "Block IoT to LAN v2"
+        # …and every unspecified field survived — a blind PUT would have wiped these.
+        assert put_body["action"] == "BLOCK"
+        assert put_body["enabled"] is True
+        assert put_body["source"] == {"zoneId": "iot", "matchOppositeProtocol": False}
+        assert put_body["destination"] == {"zoneId": "lan"}
+        assert put_body["loggingEnabled"] is True
+
+    async def test_non_networks_resource_update_strips_readonly_keys(
+        self, mock_env_apikey: None, mocker: MockerFixture
+    ) -> None:
+        # The live Integration-API PUT 400s on echoed read-only keys, so the
+        # GET→merge→PUT body must not carry them (AUD-04-41: previously only
+        # networks stripped, so even full-echo updates of other resources failed).
+        client = UniFiClient()
+        mocker.patch.object(client, "_resolve_integration_site_id", return_value="S")
+        current = {
+            "id": "d1",
+            "metadata": {"origin": "USER"},
+            "createdAt": "2026-06-01T00:00:00Z",
+            "updatedAt": "2026-06-10T00:00:00Z",
+            "statistics": {"hits": 42},
+            "domain": "ads.example.com",
+            "action": "BLOCK",
+        }
+
+        async def fake_request(method: str, path: str, **kwargs: object) -> dict[str, object]:
+            if method == "get":
+                return current
+            return {"id": "d1"}
+
+        req = mocker.patch.object(client, "_integration_request", side_effect=fake_request)
+        await client.integration_update("dns_policies", "d1", {"action": "ALLOW"})
+
+        put_body = req.await_args_list[1].kwargs["json_body"]
+        for ro in ("id", "metadata", "default", "createdAt", "updatedAt", "statistics"):
+            assert ro not in put_body, f"read-only key {ro} must be stripped before PUT"
+        assert put_body == {"domain": "ads.example.com", "action": "ALLOW"}
+
+    async def test_resource_update_missing_item_raises(self, mock_env_apikey: None, mocker: MockerFixture) -> None:
+        # Read-merge needs the current object; a missing item must error, not blind-PUT.
+        client = UniFiClient()
+        mocker.patch.object(client, "_resolve_integration_site_id", return_value="S")
+        req = mocker.patch.object(client, "_integration_request", return_value=None)
+        with pytest.raises(UniFiError, match="cannot read-merge"):
+            await client.integration_update("acl_rules", "missing", {"enabled": False})
+        # Only the GET fired — no destructive PUT was attempted.
+        assert [c.args[0] for c in req.await_args_list] == ["get"]
 
     async def test_delete_network(self, mock_env_apikey: None, mocker: MockerFixture) -> None:
         client = UniFiClient()

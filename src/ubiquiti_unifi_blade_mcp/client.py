@@ -21,6 +21,7 @@ from aiounifi.models.configuration import Configuration
 from ubiquiti_unifi_blade_mcp.models import (
     ControllerConfig,
     merge_network_update,
+    merge_resource_update,
     parse_controllers,
 )
 
@@ -780,28 +781,34 @@ class UniFiClient:
     async def integration_update(
         self, resource: str, item_id: str, body: dict[str, Any], controller: str | None = None
     ) -> dict[str, Any]:
-        """Update (PUT) an Integration-API resource item with the supplied body.
+        """Update (PUT) an Integration-API resource item, read-merge-write.
 
-        For ``networks`` the Integration-API ``PUT`` replaces the whole object, so
-        a blind partial body wipes everything not re-sent (the DHCP/L3-loss bug
-        DD-383 fixes). This method therefore does read-merge-write for
-        ``resource == 'networks'``: GET the current (un-normalized) object,
-        deep-merge ``body`` into it via :func:`merge_network_update`, and PUT the
-        merged result. This fires regardless of which tool calls in
-        (``unifi_update_network`` AND ``unifi_resource_update('networks')``) — the
-        single non-destructive chokepoint. Other resources keep blind-PUT
-        semantics (their raw body is the authored full object).
+        The Integration-API ``PUT`` replaces the whole object, so a blind partial
+        body wipes everything not re-sent — the DHCP/L3-loss class DD-383 fixed
+        for ``networks``; AUD-04-41 generalises the fix to ALL writable
+        resources. Every update therefore GETs the current (un-normalized)
+        object, deep-merges the caller's partial ``body`` over it, strips the
+        server-managed read-only keys the live PUT rejects when echoed back
+        (without the strip even a full GET→edit→PUT round-trip 400s), and PUTs
+        the merged result. ``networks`` keeps its dedicated merge
+        (:func:`merge_network_update`) because its change-keys are *translated*
+        (``subnet``/``gateway``/``dhcp_*`` → nested ``ipv4Configuration``), not
+        raw-overlaid; all other resources use the generic
+        :func:`merge_resource_update` raw overlay. Fires regardless of which
+        tool calls in (``unifi_update_network`` AND ``unifi_resource_update``) —
+        the single non-destructive chokepoint.
         """
         path, read_only = self._resource_path(resource)
         if read_only:
             raise UniFiError(f"Resource '{resource}' is read-only — update is not supported.")
         site_id = await self._resolve_integration_site_id(controller)
-        put_body = body
+        current = await self.integration_get(resource, item_id, controller)
+        if current is None:
+            raise UniFiError(f"{resource} item {item_id} not found — cannot read-merge update.")
         if resource == "networks":
-            current = await self.integration_get("networks", item_id, controller)
-            if current is None:
-                raise UniFiError(f"Network {item_id} not found — cannot read-merge update.")
             put_body = merge_network_update(current, body)
+        else:
+            put_body = merge_resource_update(current, body)
         data = await self._integration_request(
             "put", f"sites/{site_id}/{path}/{item_id}", controller=controller, json_body=put_body
         )

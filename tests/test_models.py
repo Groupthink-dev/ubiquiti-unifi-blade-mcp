@@ -7,6 +7,7 @@ import pytest
 from ubiquiti_unifi_blade_mcp.models import (
     is_write_enabled,
     merge_network_update,
+    merge_resource_update,
     network_spec_from_args,
     parse_controllers,
     require_write,
@@ -334,6 +335,74 @@ class TestMergeNetworkUpdate:
         base = self._full_network()
         merged = merge_network_update(base, {"name": "x"})
         assert merged["ipv4Configuration"] == base["ipv4Configuration"]
+
+
+class TestMergeResourceUpdate:
+    """AUD-04-41: generic read-merge for non-networks Integration-API resources."""
+
+    @staticmethod
+    def _full_policy() -> dict[str, object]:
+        return {
+            "id": "p1",
+            "metadata": {"origin": "USER"},
+            "default": False,
+            "createdAt": "2026-06-01T00:00:00Z",
+            "updatedAt": "2026-06-10T00:00:00Z",
+            "statistics": {"hits": 7},
+            "name": "Block IoT",
+            "enabled": True,
+            "action": "BLOCK",
+            "source": {"zoneId": "iot", "port": {"matchingTarget": "ANY"}},
+            "destination": {"zoneId": "lan"},
+            "schedule": ["MON", "TUE"],
+        }
+
+    def test_partial_update_preserves_unspecified_fields(self) -> None:
+        base = self._full_policy()
+        merged = merge_resource_update(base, {"enabled": False})
+        assert merged["enabled"] is False
+        # Everything not in the changes body survives — the anti-wipe guarantee.
+        assert merged["name"] == "Block IoT"
+        assert merged["action"] == "BLOCK"
+        assert merged["source"] == {"zoneId": "iot", "port": {"matchingTarget": "ANY"}}
+        assert merged["destination"] == {"zoneId": "lan"}
+        assert merged["schedule"] == ["MON", "TUE"]
+
+    def test_nested_dicts_merge_not_replace(self) -> None:
+        base = self._full_policy()
+        merged = merge_resource_update(base, {"source": {"zoneId": "guest"}})
+        # The sibling nested key survives the partial nested edit.
+        assert merged["source"] == {"zoneId": "guest", "port": {"matchingTarget": "ANY"}}
+
+    def test_lists_replace_wholesale(self) -> None:
+        base = self._full_policy()
+        merged = merge_resource_update(base, {"schedule": ["SAT"]})
+        assert merged["schedule"] == ["SAT"]
+
+    def test_strips_readonly_keys(self) -> None:
+        # The live PUT rejects echoed server-managed keys ("Unknown request body
+        # property") — strip the networks-verified set plus timestamps/statistics.
+        merged = merge_resource_update(self._full_policy(), {"name": "renamed"})
+        for ro in ("id", "metadata", "default", "createdAt", "updatedAt", "statistics"):
+            assert ro not in merged, f"{ro} must be stripped before PUT"
+        assert merged["name"] == "renamed"
+
+    def test_does_not_mutate_inputs(self) -> None:
+        base = self._full_policy()
+        changes: dict[str, object] = {"source": {"zoneId": "guest"}}
+        merge_resource_update(base, changes)
+        assert base["source"] == {"zoneId": "iot", "port": {"matchingTarget": "ANY"}}
+        assert base["id"] == "p1"
+        assert changes == {"source": {"zoneId": "guest"}}
+
+    def test_changes_dict_not_aliased_into_result(self) -> None:
+        # Mutating the caller's nested dict after the merge must not leak into
+        # the merged body (changes are deep-copied before overlay).
+        base: dict[str, object] = {"name": "x"}
+        nested = {"zoneId": "guest"}
+        merged = merge_resource_update(base, {"source": nested})
+        nested["zoneId"] = "mutated"
+        assert merged["source"] == {"zoneId": "guest"}  # type: ignore[comparison-overlap]
 
 
 class TestWriteGate:

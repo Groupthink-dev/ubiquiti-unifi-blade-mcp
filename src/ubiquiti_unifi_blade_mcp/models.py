@@ -133,6 +133,17 @@ _MANAGEMENT_BY_PURPOSE = {
 # merge_network_update() strips these from the read-merged body before PUT.
 _NETWORK_READONLY_KEYS = ("id", "metadata", "default")
 
+# Generalised strip-set for ALL Integration-API resources (AUD-04-41): the
+# live-verified networks set (id/metadata/default — Network 10.x rejects each
+# when echoed back, paddington 2026-06-06) plus the documented Integration-API
+# server-managed metadata keys that GET responses carry but PUT bodies must not:
+# creation/update timestamps and statistics counters.
+_RESOURCE_READONLY_KEYS = _NETWORK_READONLY_KEYS + (
+    "createdAt",
+    "updatedAt",
+    "statistics",
+)
+
 
 def _parse_host_and_prefix(subnet: str | None, gateway: str | None) -> tuple[str | None, int | None]:
     """Resolve (hostIpAddress, prefixLength) from a CIDR ``subnet`` and/or ``gateway``.
@@ -322,6 +333,44 @@ def merge_network_update(base: dict[str, object], changes: dict[str, object]) ->
     for ro_key in _NETWORK_READONLY_KEYS:
         merged.pop(ro_key, None)
 
+    return merged
+
+
+def _deep_merge_dicts(base: dict[str, object], overlay: dict[str, object]) -> dict[str, object]:
+    """Recursively overlay ``overlay`` onto ``base`` in place and return ``base``.
+
+    Nested dicts merge key-by-key; everything else (scalars, lists) replaces —
+    matching the merge semantics :func:`merge_network_update` applies to
+    ``ipv4Configuration``/``dhcpConfiguration``.
+    """
+    for key, value in overlay.items():
+        existing = base.get(key)
+        if isinstance(value, dict) and isinstance(existing, dict):
+            _deep_merge_dicts(existing, value)
+        else:
+            base[key] = value
+    return base
+
+
+def merge_resource_update(base: dict[str, object], changes: dict[str, object]) -> dict[str, object]:
+    """Deep-merge a partial ``changes`` body over a fetched resource object (read-merge-write).
+
+    The Integration-API ``PUT`` replaces the whole object, so a blind partial PUT
+    wipes every field not re-sent — the DD-383 DHCP-wipe class, previously fixed
+    only for ``networks`` (AUD-04-41 generalises it to all writable resources:
+    firewall policies, WLANs, ACL rules, DNS policies, traffic-matching lists,
+    vouchers). Unlike :func:`merge_network_update` this is a raw pass-through
+    overlay — caller keys are the wire-schema keys, nothing is translated.
+    Nested dicts merge (unspecified siblings survive); scalars and lists replace.
+
+    The server-managed read-only keys (``_RESOURCE_READONLY_KEYS``) are stripped
+    from the merged body — the live PUT 400s on echoed read-only keys ("Unknown
+    request body property"), so without the strip even a full GET→edit→PUT
+    round-trip is rejected. Neither input is mutated.
+    """
+    merged = _deep_merge_dicts(copy.deepcopy(base), copy.deepcopy(changes))
+    for ro_key in _RESOURCE_READONLY_KEYS:
+        merged.pop(ro_key, None)
     return merged
 
 

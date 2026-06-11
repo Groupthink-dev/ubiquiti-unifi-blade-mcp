@@ -732,12 +732,20 @@ async def unifi_resource_update(
     item_id: Annotated[str, Field(description="Item id (from unifi_resource_list)")],
     body: Annotated[
         dict[str, Any],
-        Field(description="Raw JSON body (PUT) per the v10.x Integration-API schema for this resource"),
+        Field(
+            description=(
+                "Partial JSON body per the v10.x Integration-API schema — read-merged over the "
+                "current object before PUT (unspecified fields preserved; read-only keys stripped)"
+            )
+        ),
     ],
     controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
     confirm: Annotated[bool, Field(description="Must be true to confirm the update")] = False,
 ) -> str:
-    """Update (PUT) an Integration-API resource item. Requires UNIFI_API_KEY, UNIFI_WRITE_ENABLED=true, confirm=true."""
+    """Update an Integration-API resource item (non-destructive read-merge PUT).
+
+    Requires UNIFI_API_KEY, UNIFI_WRITE_ENABLED=true, confirm=true.
+    """
     gate = _write_gate(controller)
     if gate:
         return gate
