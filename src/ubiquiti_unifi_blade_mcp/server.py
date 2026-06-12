@@ -33,6 +33,7 @@ from ubiquiti_unifi_blade_mcp.formatters import (
     format_traffic_routes,
     format_traffic_rules,
     format_wlan_list,
+    format_zone_list,
     mark_call_start,
     meta_tail,
 )
@@ -83,7 +84,7 @@ mcp = FastMCP(
     instructions=(
         "Ubiquiti UniFi network operations. Monitor devices, view clients, "
         "inspect firewall policies, check traffic routes, and manage WLANs. "
-        "Manage networks/VLANs (list/create/update/delete) via the official "
+        "Manage networks/VLANs (list/create/update/delete) and network/firewall zones via the official "
         "Integration API — these tools require an API key (UNIFI_API_KEY). "
         "Multi-controller support — call unifi_controllers to list configured consoles, then "
         "pass controller= to target one. Omitting controller uses the default (first) console on "
@@ -229,6 +230,19 @@ async def unifi_network(
         if network is None:
             return f"Error: Network {network_id} not found"
         return meta_tail(format_network_detail(network), 1)
+    except UniFiError as e:
+        return _error_response(e)
+
+
+@mcp.tool()
+@_audited
+async def unifi_zones(
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
+) -> str:
+    """List UniFi network/firewall zones, including the IDs accepted by unifi_create_network."""
+    try:
+        zones = await _get_client().get_zones(controller)
+        return meta_tail(format_zone_list(zones), len(zones))
     except UniFiError as e:
         return _error_response(e)
 
@@ -532,6 +546,11 @@ async def unifi_create_network(
     ping_conflict: Annotated[bool, Field(description="DHCP ping conflict detection (default true)")] = True,
     isolated: Annotated[bool, Field(description="Isolate this network (no inter-VLAN routing)")] = False,
     internet_access: Annotated[bool, Field(description="Allow internet access (default true)")] = True,
+    zone_id: Annotated[str | None, Field(description="UniFi network/firewall zone ID; see unifi_zones")] = None,
+    zone_name: Annotated[
+        str | None,
+        Field(description="UniFi network/firewall zone name to resolve to zoneId; see unifi_zones"),
+    ] = None,
     controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
     confirm: Annotated[bool, Field(description="Must be true to confirm — creates a network/VLAN")] = False,
 ) -> str:
@@ -542,6 +561,11 @@ async def unifi_create_network(
     if not confirm:
         return "Error: Set confirm=true to create this network/VLAN."
     try:
+        resolved_zone_id = await _get_client().resolve_network_zone_id(
+            zone_id=zone_id,
+            zone_name=zone_name,
+            controller=controller,
+        )
         spec = network_spec_from_args(
             name,
             vlan_id,
@@ -557,6 +581,7 @@ async def unifi_create_network(
             ping_conflict=ping_conflict,
             isolated=isolated,
             internet_access=internet_access,
+            zone_id=resolved_zone_id,
         )
         net = await _get_client().create_network(spec, controller)
         return meta_tail(f"Created network '{name}' (vlan {vlan_id})\n{format_network_detail(net)}", 1)

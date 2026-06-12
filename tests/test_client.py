@@ -136,12 +136,59 @@ class TestNetworkClient:
         client = UniFiClient()
         mocker.patch.object(client, "_resolve_integration_site_id", return_value="S")
         req = mocker.patch.object(
-            client, "_integration_request", return_value={"id": "new1", "name": "Services", "vlanId": 40}
+            client,
+            "_integration_request",
+            return_value={"id": "new1", "name": "Services", "vlanId": 40, "zoneId": "zone-internal"},
         )
-        spec = network_spec_from_args("Services", 40, subnet="10.1.40.254/24")
+        spec = network_spec_from_args("Services", 40, subnet="10.1.40.254/24", zone_id="zone-internal")
         net = await client.create_network(spec)
         req.assert_awaited_once_with("post", "sites/S/networks", controller=None, json_body=spec)
         assert net["id"] == "new1"
+        assert net["zoneId"] == "zone-internal"
+
+    async def test_resolve_network_zone_id_auto_selects_single_internal(
+        self, mock_env_apikey: None, mocker: MockerFixture
+    ) -> None:
+        client = UniFiClient()
+        mocker.patch.object(
+            client,
+            "get_zones",
+            return_value=[
+                {"id": "zone-internal", "name": "Internal"},
+                {"id": "zone-guest", "name": "Guest"},
+            ],
+        )
+
+        assert await client.resolve_network_zone_id() == "zone-internal"
+
+    async def test_resolve_network_zone_id_refuses_ambiguous_default(
+        self, mock_env_apikey: None, mocker: MockerFixture
+    ) -> None:
+        client = UniFiClient()
+        mocker.patch.object(
+            client,
+            "get_zones",
+            return_value=[
+                {"id": "zone-internal", "name": "Internal"},
+                {"id": "zone-default", "name": "Default"},
+            ],
+        )
+
+        with pytest.raises(UniFiError, match="ambiguous"):
+            await client.resolve_network_zone_id()
+
+    async def test_resolve_network_zone_id_by_name(self, mock_env_apikey: None, mocker: MockerFixture) -> None:
+        client = UniFiClient()
+        mocker.patch.object(
+            client,
+            "get_zones",
+            return_value=[
+                {"id": "zone-internal", "name": "Internal"},
+                {"id": "zone-guest", "displayName": "Guest"},
+            ],
+        )
+
+        assert await client.resolve_network_zone_id(zone_name="guest") == "zone-guest"
 
     async def test_update_network_reads_merges_and_puts(self, mock_env_apikey: None, mocker: MockerFixture) -> None:
         # update_network must GET the current object, deep-merge the changes, and

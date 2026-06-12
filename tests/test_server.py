@@ -52,3 +52,65 @@ class TestControllersTool:
         assert "home (default) — 192.168.1.1" in out
         assert "office — 10.0.0.1" in out
         assert "mutations require it" in out
+
+
+class TestZoneAwareNetworkCreate:
+    @pytest.mark.asyncio
+    async def test_unifi_zones_lists_zone_ids(self, mock_env_apikey: None, monkeypatch: pytest.MonkeyPatch) -> None:
+        class FakeClient:
+            async def get_zones(self, controller: str | None = None) -> list[dict[str, object]]:
+                assert controller is None
+                return [{"id": "zone-internal", "name": "Internal", "default": True}]
+
+        monkeypatch.setattr(server, "_get_client", lambda: FakeClient())
+
+        out = await server.unifi_zones()
+        assert "Internal" in out
+        assert "id=zone-internal" in out
+
+    @pytest.mark.asyncio
+    async def test_create_network_resolves_zone_before_post(
+        self, mock_env_apikey: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("UNIFI_WRITE_ENABLED", "true")
+        posted: dict[str, object] = {}
+
+        class FakeClient:
+            controller_names = ["default"]
+
+            async def resolve_network_zone_id(
+                self,
+                *,
+                zone_id: str | None = None,
+                zone_name: str | None = None,
+                controller: str | None = None,
+            ) -> str:
+                assert zone_id is None
+                assert zone_name == "Internal"
+                assert controller is None
+                return "zone-internal"
+
+            async def create_network(self, spec: dict[str, object], controller: str | None = None) -> dict[str, object]:
+                posted.update(spec)
+                return {
+                    "id": "network-dev",
+                    "name": spec["name"],
+                    "vlanId": spec["vlanId"],
+                    "enabled": True,
+                    "management": spec["management"],
+                    "zoneId": spec["zoneId"],
+                }
+
+        monkeypatch.setattr(server, "_get_client", lambda: FakeClient())
+
+        out = await server.unifi_create_network(
+            "v60-dev",
+            60,
+            subnet="10.1.60.1/24",
+            zone_name="Internal",
+            confirm=True,
+        )
+
+        assert posted["zoneId"] == "zone-internal"
+        assert "Created network 'v60-dev'" in out
+        assert "Zone ID: zone-internal" in out

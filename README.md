@@ -10,7 +10,7 @@ An MCP server that gives AI agents structured access to Ubiquiti UniFi network c
 
 UniFi controllers expose a rich but undocumented REST API behind cookie-based auth with CSRF tokens and optional 2FA. The [aiounifi](https://github.com/Kane610/aiounifi) library (MIT, powers the Home Assistant integration) handles the protocol complexity — UniFi OS vs classic controller detection, TOTP 2FA, websocket events. This MCP wraps it with the guardrails that automated agents need:
 
-- **Security-first tool set** — 18 tools focused on what network security agents actually need: device health, client visibility, firewall state, traffic rules, DPI restrictions, port forwards. Not 161 tools for every possible configuration change.
+- **Security-first tool set** — 30 tools focused on what network security agents actually need: device health, client visibility, firewall state, traffic rules, DPI restrictions, port forwards, network/VLANs, and Integration-API resources. Not 161 tools for every possible configuration change.
 - **Token-efficient output** — compact pipe-delimited format. A 30-device network in ~50 tokens per device. Client listings with signal strength, experience score, and blocked status at a glance.
 - **Write-gated mutations** — client blocking, WLAN toggling, device restart, and traffic route changes require explicit opt-in via `UNIFI_WRITE_ENABLED=true`. Destructive operations (block, restart) additionally require per-call `confirm=true`.
 - **Multi-controller** — manage home and office networks from a single MCP instance. Each controller authenticates independently with separate sessions.
@@ -19,7 +19,7 @@ UniFi controllers expose a rich but undocumented REST API behind cookie-based au
 
 | | ubiquiti-unifi-blade-mcp | sirkirby/unifi-mcp | enuno/unifi-mcp-server |
 |---|---|---|---|
-| **Focus** | Monitoring + security + Integration-API resource mgmt (28 tools) | Full management (161 tools) | Full management (74 tools) |
+| **Focus** | Monitoring + security + Integration-API resource mgmt (30 tools) | Full management (161 tools) | Full management (74 tools) |
 | **Design for** | LLM agents (token-efficient) | Claude Code (lazy loading) | General MCP clients |
 | **Multi-controller** | Native (env var config) | Single controller | Multi-mode (local/cloud) |
 | **Write safety** | Dual-gated (env + confirm) | Preview-then-confirm | Permission model |
@@ -112,7 +112,7 @@ The monitoring tools authenticate via username/password. Rather than using your 
 
 7. Set `UNIFI_USERNAME` and `UNIFI_PASSWORD` to the account's credentials. Use the `mcp-ro` credentials by default; switch to `mcp-rw` only for sessions where `UNIFI_WRITE_ENABLED=true`.
 
-## 29 tools, 7 categories
+## 30 tools, 7 categories
 
 ### Info & Sites (3 tools)
 
@@ -122,12 +122,13 @@ The monitoring tools authenticate via username/password. Rather than using your 
 | `unifi_info` | Health check — controller version, hostname, device/client counts, write gate (all consoles when `controller` omitted) | ~60 |
 | `unifi_sites` | List sites on the controller | ~20/site |
 
-### Networks & VLANs (2 read tools — require `UNIFI_API_KEY`)
+### Networks & VLANs (3 read tools — require `UNIFI_API_KEY`)
 
 | Tool | Purpose | Token cost |
 |------|---------|------------|
 | `unifi_networks` | List networks/VLANs — name, VLAN id, enabled, purpose, subnet | ~25/network |
 | `unifi_network` | Full detail — VLAN id, subnet, gateway, purpose | ~60 |
+| `unifi_zones` | List network/firewall zones and IDs used by `unifi_create_network` | ~20/zone |
 
 ### Devices (2 tools) — ⚠️ unofficial API
 
@@ -167,7 +168,7 @@ The first six ride the **unofficial** private API (⚠️); the three `*_network
 | `unifi_toggle_wlan` | write | ⚠️ unofficial | Enable or disable an SSID |
 | `unifi_toggle_traffic_route` | write | ⚠️ unofficial | Enable or disable a traffic route |
 | `unifi_restart_device` | write + confirm | ⚠️ unofficial | Restart an AP, switch, or gateway |
-| `unifi_create_network` | write + confirm + API key | ✅ official | Create a network/VLAN |
+| `unifi_create_network` | write + confirm + API key | ✅ official | Create a network/VLAN; accepts `zone_id` or `zone_name`, otherwise auto-selects a default/internal zone only when unambiguous |
 | `unifi_update_network` | write + confirm + API key | ✅ official | Update a network/VLAN (supplied fields) |
 | `unifi_delete_network` | write + confirm + API key | ✅ official | Delete a network/VLAN |
 
@@ -292,7 +293,7 @@ make run            # Start MCP server (stdio)
 
 ```
 src/ubiquiti_unifi_blade_mcp/
-├── server.py       — FastMCP server, 28 @mcp.tool decorators
+├── server.py       — FastMCP server, 30 @mcp.tool decorators
 ├── client.py       — UniFiClient: aiounifi session auth + Integration API (X-API-KEY) generic resource layer, multi-controller, credential scrubbing
 ├── formatters.py   — Token-efficient output (pipe-delimited, null omission, human units)
 ├── models.py       — Controller config, auth modes, write gate, network payload builder

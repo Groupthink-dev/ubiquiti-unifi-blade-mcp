@@ -140,6 +140,10 @@ class TestNetworkSpec:
         spec = network_spec_from_args("zz-probe", 4090, purpose="vlan-only", enabled=False)
         assert spec == {"management": "UNMANAGED", "name": "zz-probe", "enabled": False, "vlanId": 4090}
 
+    def test_zone_id_is_included_when_supplied(self) -> None:
+        spec = network_spec_from_args("Services", 40, subnet="10.1.40.1/24", zone_id="zone-internal")
+        assert spec["zoneId"] == "zone-internal"
+
     def test_minimal_spec_defaults_to_gateway(self) -> None:
         spec = network_spec_from_args("Guest", 30)
         # Default purpose=corporate -> GATEWAY; no subnet -> no ipv4Configuration emitted,

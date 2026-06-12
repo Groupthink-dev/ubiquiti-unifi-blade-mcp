@@ -26,6 +26,7 @@ services:
     sites: unifi_sites
     networks: unifi_networks
     network: unifi_network
+    zones: unifi_zones
     unblock_client: unifi_unblock_client
     reconnect_client: unifi_reconnect_client
     toggle_traffic_route: unifi_toggle_traffic_route
@@ -75,7 +76,7 @@ setup:
       secret: true
       required: false
       placeholder: "X-API-KEY value"
-      help: "Generate in UniFi Network → Settings → Control Plane → Integrations. Required for network/VLAN tools (list/create/update/delete networks)."
+      help: "Generate in UniFi Network → Settings → Control Plane → Integrations. Required for network/VLAN tools (list/create/update/delete networks, list zones)."
     - key: UNIFI_PORT
       label: "Port"
       type: string

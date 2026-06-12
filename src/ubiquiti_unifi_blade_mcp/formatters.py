@@ -304,6 +304,9 @@ def format_network_list(networks: list[dict[str, Any]]) -> str:
         subnet = n.get("subnet", "")
         if subnet:
             parts.append(f"subnet={subnet}")
+        zone_id = n.get("zoneId", "")
+        if zone_id:
+            parts.append(f"zoneId={zone_id}")
         parts.append(f"id={n.get('id', '?')}")
         lines.append(" | ".join(parts))
     return "\n".join(lines)
@@ -324,7 +327,30 @@ def format_network_detail(net: dict[str, Any]) -> str:
     gateway = net.get("gateway", "")
     if gateway:
         lines.append(f"Gateway: {gateway}")
+    zone_id = net.get("zoneId", "")
+    if zone_id:
+        lines.append(f"Zone ID: {zone_id}")
     lines.append(f"ID: {net.get('id', '?')}")
+    return "\n".join(lines)
+
+
+def format_zone_list(zones: list[dict[str, Any]]) -> str:
+    """Format firewall/network zones as compact lines."""
+    if not zones:
+        return "(no zones)"
+    lines = []
+    for z in zones:
+        label = z.get("name") or z.get("displayName") or z.get("description") or z.get("id") or "?"
+        parts = [str(label)]
+        zone_type = z.get("type") or z.get("zoneType")
+        if zone_type:
+            parts.append(f"type={zone_type}")
+        if z.get("default") is True or z.get("isDefault") is True:
+            parts.append("default")
+        zid = z.get("id") or z.get("_id")
+        if zid and str(label) != str(zid):
+            parts.append(f"id={zid}")
+        lines.append(" | ".join(parts))
     return "\n".join(lines)
 
 

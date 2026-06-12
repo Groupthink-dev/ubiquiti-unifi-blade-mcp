@@ -180,6 +180,7 @@ def network_spec_from_args(
     ping_conflict: bool = True,
     isolated: bool = False,
     internet_access: bool = True,
+    zone_id: str | None = None,
 ) -> dict[str, object]:
     """Assemble an Integration-API ``networks`` payload from flat tool arguments.
 
@@ -214,6 +215,8 @@ def network_spec_from_args(
     spec: dict[str, object] = {"management": management, "name": name, "enabled": enabled}
     if vlan_id is not None:
         spec["vlanId"] = vlan_id
+    if zone_id:
+        spec["zoneId"] = zone_id
 
     if management == "UNMANAGED":
         # VLAN-only networks carry no L3 configuration — nothing further to add.

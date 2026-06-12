@@ -64,6 +64,8 @@ _CREDENTIAL_PATTERNS = [
     re.compile(r"TOKEN=\S+", re.IGNORECASE),
 ]
 
+_DEFAULT_NETWORK_ZONE_NAMES = {"default", "internal", "lan"}
+
 
 class UniFiError(Exception):
     """Base error for UniFi client operations."""
@@ -79,6 +81,37 @@ class NotFoundError(UniFiError):
 
 class ConnectionError(UniFiError):
     """Network or controller connection error."""
+
+
+def _zone_id(zone: dict[str, Any]) -> str:
+    """Return the Integration-API zone id, accepting both common id spellings."""
+    return str(zone.get("id") or zone.get("_id") or "")
+
+
+def _zone_label(zone: dict[str, Any]) -> str:
+    """Human label for a firewall/network zone."""
+    return str(zone.get("name") or zone.get("displayName") or zone.get("description") or _zone_id(zone) or "?")
+
+
+def _zone_candidates_message(zones: list[dict[str, Any]]) -> str:
+    """Compact zone list for resolver errors."""
+    if not zones:
+        return "(no zones returned)"
+    return ", ".join(f"{_zone_label(z)} (id={_zone_id(z) or '?'})" for z in zones)
+
+
+def _is_default_network_zone(zone: dict[str, Any]) -> bool:
+    """True for the unambiguous default/internal network zone candidates.
+
+    UniFi zone names vary by Network release/controller history. Keep this
+    conservative: exact default/internal/LAN labels or explicit default flags
+    are candidates; anything broader risks silently putting a network into the
+    wrong policy zone.
+    """
+    if zone.get("default") is True or zone.get("isDefault") is True:
+        return True
+    label = _zone_label(zone).strip().lower()
+    return label in _DEFAULT_NETWORK_ZONE_NAMES
 
 
 def _scrub(message: str) -> str:
@@ -847,7 +880,7 @@ class UniFiClient:
                         subnet = str(ipaddress.ip_interface(f"{host}/{prefix}").network)
                     except ValueError:
                         subnet = f"{host}/{prefix}"
-        return {
+        normalized = {
             "id": n.get("id") or n.get("_id", ""),
             "name": n.get("name", "?"),
             "enabled": n.get("enabled", n.get("vlan_enabled", True)),
@@ -856,6 +889,10 @@ class UniFiClient:
             "subnet": subnet,
             "gateway": gateway,
         }
+        zone_id = n.get("zoneId") or n.get("zone_id")
+        if zone_id:
+            normalized["zoneId"] = zone_id
+        return normalized
 
     # Dedicated network/VLAN methods — ergonomic typed surface over the generic
     # resource layer (the primary use case; benefits from field normalization).
@@ -869,6 +906,68 @@ class UniFiClient:
         """Get a single network / VLAN by id (Integration API)."""
         data = await self.integration_get("networks", network_id, controller)
         return self._normalize_network(data) if data else None
+
+    async def get_zones(self, controller: str | None = None) -> list[dict[str, Any]]:
+        """List firewall/network zones (Integration API)."""
+        return await self.integration_list("firewall_zones", controller)
+
+    async def resolve_network_zone_id(
+        self,
+        *,
+        zone_id: str | None = None,
+        zone_name: str | None = None,
+        controller: str | None = None,
+    ) -> str:
+        """Resolve the zoneId required by newer UniFi network-create payloads.
+
+        Explicit ``zone_id`` wins without an extra read. ``zone_name`` is matched
+        case-insensitively against id/name/displayName/description. If neither is
+        supplied, auto-select only when exactly one conservative
+        default/internal/LAN candidate exists; otherwise fail with the available
+        zone list so the caller can choose.
+        """
+        if zone_id and zone_name:
+            raise UniFiError("Pass only one of zone_id or zone_name.")
+        if zone_id:
+            return zone_id
+
+        zones = await self.get_zones(controller)
+        if zone_name:
+            wanted = zone_name.strip().lower()
+            matches = [
+                z
+                for z in zones
+                if wanted
+                and wanted
+                in {
+                    _zone_id(z).lower(),
+                    str(z.get("name") or "").strip().lower(),
+                    str(z.get("displayName") or "").strip().lower(),
+                    str(z.get("description") or "").strip().lower(),
+                }
+            ]
+            if len(matches) == 1 and _zone_id(matches[0]):
+                return _zone_id(matches[0])
+            if not matches:
+                raise UniFiError(
+                    f"No UniFi network/firewall zone named '{zone_name}'. "
+                    f"Available zones: {_zone_candidates_message(zones)}"
+                )
+            raise UniFiError(f"Zone name '{zone_name}' is ambiguous. Matches: {_zone_candidates_message(matches)}")
+
+        candidates = [z for z in zones if _is_default_network_zone(z) and _zone_id(z)]
+        if len(candidates) == 1:
+            return _zone_id(candidates[0])
+        if len(candidates) > 1:
+            raise UniFiError(
+                "Network create needs zone_id or zone_name; default/internal zone auto-select is ambiguous. "
+                f"Candidate zones: {_zone_candidates_message(candidates)}. "
+                f"Available zones: {_zone_candidates_message(zones)}"
+            )
+        raise UniFiError(
+            "Network create needs zone_id or zone_name; no default/internal zone could be auto-selected. "
+            f"Available zones: {_zone_candidates_message(zones)}"
+        )
 
     async def create_network(self, spec: dict[str, Any], controller: str | None = None) -> dict[str, Any]:
         """Create a network / VLAN (Integration API). ``spec`` is the raw API body."""
