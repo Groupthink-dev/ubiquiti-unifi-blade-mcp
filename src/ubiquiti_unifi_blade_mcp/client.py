@@ -65,6 +65,7 @@ _CREDENTIAL_PATTERNS = [
 ]
 
 _DEFAULT_NETWORK_ZONE_NAMES = {"default", "internal", "lan"}
+_DNS_VALUE_KEYS = ("value", "target", "ipAddress", "ip_address", "canonicalName", "canonical_name")
 
 
 class UniFiError(Exception):
@@ -119,6 +120,35 @@ def _scrub(message: str) -> str:
     for pattern in _CREDENTIAL_PATTERNS:
         message = pattern.sub("[REDACTED]", message)
     return message
+
+
+def _truthy(value: Any) -> bool:
+    """Interpret common UniFi boolean spellings from private API payloads."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int | float):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
+
+
+def _dhcp_reservation_sort_key(item: dict[str, Any]) -> tuple[int, int | str, str]:
+    """Sort reservations by IP, falling back to lexical order for bad values."""
+    ip = str(item.get("ip") or "")
+    try:
+        return (0, int(ipaddress.ip_address(ip)), str(item.get("mac") or ""))
+    except ValueError:
+        return (1, ip, str(item.get("mac") or ""))
+
+
+def _first_present(row: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    """Return the first non-empty value for a set of tolerated API keys."""
+    for key in keys:
+        value = row.get(key)
+        if value not in (None, ""):
+            return value
+    return ""
 
 
 class UniFiClient:
@@ -451,6 +481,38 @@ class UniFiClient:
             "oui": getattr(client, "oui", ""),
             "ap_mac": getattr(client, "ap_mac", ""),
         }
+
+    async def get_dhcp_reservations(self, controller: str | None = None) -> list[dict[str, Any]]:
+        """Get DHCP reservation evidence from the legacy user endpoint."""
+        ctrl = await self._call(controller)
+        site = ctrl.connectivity.config.site
+        data = await ctrl.request(ApiRequest("get", f"/api/s/{site}/rest/user", None))
+        rows = data.get("data", []) if isinstance(data, dict) else (data or [])
+        reservations: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if not _truthy(row.get("use_fixedip")):
+                continue
+            if any(_truthy(row.get(key)) for key in ("fixed_ip_disabled", "fixedip_disabled", "disabled")):
+                continue
+            mac = str(row.get("mac") or "").lower()
+            ip = str(row.get("fixed_ip") or row.get("fixedIp") or row.get("reserved_ip") or "").strip()
+            if not mac or not ip:
+                continue
+            item = {
+                "name": row.get("name") or row.get("hostname") or row.get("display_name") or mac,
+                "mac": mac,
+                "ip": ip,
+            }
+            network = row.get("network") or row.get("network_name")
+            network_id = row.get("network_id") or row.get("networkId") or row.get("networkconf_id")
+            if network:
+                item["network"] = str(network)
+            if network_id:
+                item["network_id"] = str(network_id)
+            reservations.append(item)
+        return sorted(reservations, key=_dhcp_reservation_sort_key)
 
     async def block_client(self, mac: str, controller: str | None = None) -> bool:
         """Block a client."""
@@ -855,6 +917,33 @@ class UniFiClient:
         site_id = await self._resolve_integration_site_id(controller)
         await self._integration_request("delete", f"sites/{site_id}/{path}/{item_id}", controller=controller)
         return True
+
+    @staticmethod
+    def _normalize_dns_record(policy: dict[str, Any]) -> dict[str, Any] | None:
+        """Normalize UniFi dns_policies record-shaped rows into evidence records."""
+        name = str(_first_present(policy, ("domain", "name", "host"))).strip()
+        record_type = str(_first_present(policy, ("recordType", "record_type", "type"))).strip().upper()
+        value = str(_first_present(policy, _DNS_VALUE_KEYS)).strip()
+        if record_type.endswith("_RECORD"):
+            record_type = record_type[: -len("_RECORD")]
+        if not name or not record_type or not value:
+            return None
+        if record_type in {"POLICY", "DNS"}:
+            return None
+        return {
+            "name": name,
+            "type": record_type,
+            "value": value,
+            "ttl": policy.get("ttl") or policy.get("ttlSeconds") or policy.get("ttl_seconds"),
+            "enabled": policy.get("enabled", True),
+            "id": policy.get("id") or policy.get("_id") or "",
+        }
+
+    async def get_dns_records(self, controller: str | None = None) -> list[dict[str, Any]]:
+        """Get Local DNS Record evidence from Integration-API dns_policies."""
+        policies = await self.integration_list("dns_policies", controller)
+        records = [record for policy in policies if (record := self._normalize_dns_record(policy))]
+        return sorted(records, key=lambda r: (str(r.get("name")), str(r.get("type")), str(r.get("value"))))
 
     @staticmethod
     def _normalize_network(n: dict[str, Any]) -> dict[str, Any]:

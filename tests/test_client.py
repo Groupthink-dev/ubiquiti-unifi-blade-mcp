@@ -433,6 +433,102 @@ class TestGenericIntegrationResources:
             await client.integration_list("bogus")
 
 
+class TestEvidenceClient:
+    async def test_dns_records_normalize_filter_and_sort(self, mock_env_apikey: None, mocker: MockerFixture) -> None:
+        client = UniFiClient()
+        list_ = mocker.patch.object(
+            client,
+            "integration_list",
+            return_value=[
+                {"id": "ignore", "name": "policy only", "action": "BLOCK"},
+                {
+                    "id": "c1",
+                    "domain": "z.example.lan",
+                    "recordType": "CNAME_RECORD",
+                    "canonicalName": "target.example.lan",
+                    "ttl": 600,
+                    "enabled": False,
+                },
+                {
+                    "id": "a1",
+                    "host": "a.example.lan",
+                    "type": "A_RECORD",
+                    "ipAddress": "10.1.1.20",
+                    "ttlSeconds": 300,
+                    "enabled": True,
+                },
+            ],
+        )
+
+        records = await client.get_dns_records("office")
+
+        list_.assert_awaited_once_with("dns_policies", "office")
+        assert records == [
+            {
+                "name": "a.example.lan",
+                "type": "A",
+                "value": "10.1.1.20",
+                "ttl": 300,
+                "enabled": True,
+                "id": "a1",
+            },
+            {
+                "name": "z.example.lan",
+                "type": "CNAME",
+                "value": "target.example.lan",
+                "ttl": 600,
+                "enabled": False,
+                "id": "c1",
+            },
+        ]
+
+    async def test_dhcp_reservations_read_legacy_users_filter_and_sort(
+        self, mock_env: None, mocker: MockerFixture
+    ) -> None:
+        client = UniFiClient()
+        ctrl = mocker.MagicMock()
+        ctrl.connectivity.config.site = "default"
+        ctrl.request = mocker.AsyncMock(
+            return_value={
+                "data": [
+                    {"mac": "AA:BB:CC:00:00:20", "use_fixedip": True, "fixed_ip": "10.1.1.20", "name": "NAS"},
+                    {
+                        "mac": "AA:BB:CC:00:00:10",
+                        "use_fixedip": "true",
+                        "fixed_ip": "10.1.1.10",
+                        "hostname": "cam",
+                        "network": "IoT",
+                    },
+                    {"mac": "AA:BB:CC:00:00:30", "use_fixedip": False, "fixed_ip": "10.1.1.30"},
+                    {
+                        "mac": "AA:BB:CC:00:00:40",
+                        "use_fixedip": True,
+                        "fixed_ip_disabled": True,
+                        "fixed_ip": "10.1.1.40",
+                    },
+                    {"mac": "AA:BB:CC:00:00:50", "use_fixedip": True},
+                ]
+            }
+        )
+        mocker.patch.object(client, "_call", return_value=ctrl)
+
+        reservations = await client.get_dhcp_reservations()
+
+        ctrl.request.assert_awaited_once()
+        request = ctrl.request.await_args.args[0]
+        assert request.method == "get"
+        assert request.path == "/api/s/default/rest/user"
+        assert reservations == [
+            {"name": "cam", "mac": "aa:bb:cc:00:00:10", "ip": "10.1.1.10", "network": "IoT"},
+            {"name": "NAS", "mac": "aa:bb:cc:00:00:20", "ip": "10.1.1.20"},
+        ]
+
+    async def test_apikey_only_rejects_dhcp_session_read(self, mock_env_apikey: None) -> None:
+        client = UniFiClient()
+        with pytest.raises(UniFiError, match="session auth"):
+            await client.get_dhcp_reservations()
+
+
 class TestDualAuthMode:
     """Prove a controller with both session creds AND an API key serves both tool families.
 

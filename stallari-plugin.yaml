@@ -27,6 +27,8 @@ services:
     networks: unifi_networks
     network: unifi_network
     zones: unifi_zones
+    dhcp_reservations: unifi_dhcp_reservations
+    dns_records: unifi_dns_records
     unblock_client: unifi_unblock_client
     reconnect_client: unifi_reconnect_client
     toggle_traffic_route: unifi_toggle_traffic_route
@@ -76,7 +78,7 @@ setup:
       secret: true
       required: false
       placeholder: "X-API-KEY value"
-      help: "Generate in UniFi Network → Settings → Control Plane → Integrations. Required for network/VLAN tools (list/create/update/delete networks, list zones)."
+      help: "Generate in UniFi Network → Settings → Control Plane → Integrations. Required for network/VLAN tools, Local DNS Records, and generic Integration API resource CRUD."
     - key: UNIFI_PORT
       label: "Port"
       type: string
@@ -94,7 +96,7 @@ setup:
       type: boolean
       secret: false
       required: false
-      help: "Allow client blocking, WLAN toggling, and device restarts"
+      help: "Allow client blocking, WLAN toggling, device restarts, network CRUD, and generic Integration API resource CRUD"
   test:
     tool: unifi_info
     expect: "connected"
@@ -125,10 +127,10 @@ env:
     description: "Base32-encoded TOTP secret for 2FA"
     secret: true
   - name: UNIFI_API_KEY
-    description: "Integration API key (X-API-KEY) — required for network/VLAN tools"
+    description: "Integration API key (X-API-KEY) — required for network/VLAN tools, Local DNS Records, and generic resources"
     secret: true
   - name: UNIFI_WRITE_ENABLED
-    description: "Enable write operations (block, toggle, restart)"
+    description: "Enable write operations (block, toggle, restart, network CRUD, resource CRUD)"
     default: "false"
   - name: UNIFI_CONTROLLERS
     description: "Multi-controller: comma-separated names (e.g. home,office)"

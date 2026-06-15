@@ -45,6 +45,15 @@ class FakeClient:
             {"id": "n2", "name": "Guest", "vlan": 30, "enabled": False},
         ]
 
+    async def get_dns_records(self, controller: str | None) -> list[dict[str, Any]]:
+        return [{"name": "nas.lan", "type": "A", "value": "10.1.1.20", "enabled": True}]
+
+    async def get_dhcp_reservations(self, controller: str | None) -> list[dict[str, Any]]:
+        return [
+            {"name": "NAS", "mac": "aa:bb:cc:00:00:20", "ip": "10.1.1.20"},
+            {"name": "Cam", "mac": "aa:bb:cc:00:00:30", "ip": "10.1.30.10"},
+        ]
+
     async def unblock_client(self, mac: str, controller: str | None) -> None:
         return None
 
@@ -61,6 +70,21 @@ class TestMetaTail:
         assert meta["matched_total"] == 2
         assert meta["returned"] == 2
         assert "latency_ms" in meta and isinstance(meta["latency_ms"], int)
+
+    @pytest.mark.asyncio
+    async def test_evidence_tools_carry_meta_counts(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """DHCP/DNS evidence tools append counts matching normalized records."""
+        monkeypatch.setattr(server, "_get_client", lambda: FakeClient())
+
+        dns_payload, dns_meta = _split_meta(await server.unifi_dns_records())
+        dhcp_payload, dhcp_meta = _split_meta(await server.unifi_dhcp_reservations())
+
+        assert "nas.lan" in dns_payload
+        assert dns_meta["matched_total"] == 1
+        assert dns_meta["returned"] == 1
+        assert "NAS" in dhcp_payload and "Cam" in dhcp_payload
+        assert dhcp_meta["matched_total"] == 2
+        assert dhcp_meta["returned"] == 2
 
     @pytest.mark.asyncio
     async def test_write_tool_carries_meta(self, mock_env_write: None, monkeypatch: pytest.MonkeyPatch) -> None:

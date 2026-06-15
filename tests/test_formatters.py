@@ -11,6 +11,8 @@ from ubiquiti_unifi_blade_mcp.formatters import (
     format_device_detail,
     format_device_line,
     format_device_list,
+    format_dhcp_reservations,
+    format_dns_records,
     format_dpi,
     format_firewall_policies,
     format_info,
@@ -184,6 +186,40 @@ class TestNetworkFormatters:
         assert "VLAN: 0" in result
 
 
+class TestEvidenceFormatters:
+    def test_dns_records(self) -> None:
+        records = [
+            {"name": "nas.lan", "type": "A", "value": "10.1.1.20", "ttl": 300, "enabled": True},
+            {"name": "plex.lan", "type": "CNAME", "value": "nas.lan", "enabled": False},
+        ]
+
+        result = format_dns_records(records)
+
+        assert result.splitlines() == [
+            "nas.lan | A | value=10.1.1.20 | ttl=300 | enabled",
+            "plex.lan | CNAME | value=nas.lan | DISABLED",
+        ]
+
+    def test_dns_records_empty(self) -> None:
+        assert format_dns_records([]) == "(no DNS records)"
+
+    def test_dhcp_reservations(self) -> None:
+        reservations = [
+            {"name": "NAS", "mac": "aa:bb:cc:00:00:20", "ip": "10.1.1.20", "network": "LAN"},
+            {"name": "Cam", "mac": "aa:bb:cc:00:00:30", "ip": "10.1.30.10", "network_id": "n30"},
+        ]
+
+        result = format_dhcp_reservations(reservations)
+
+        assert result.splitlines() == [
+            "NAS | aa:bb:cc:00:00:20 | ip=10.1.1.20 | network=LAN",
+            "Cam | aa:bb:cc:00:00:30 | ip=10.1.30.10 | network_id=n30",
+        ]
+
+    def test_dhcp_reservations_empty(self) -> None:
+        assert format_dhcp_reservations([]) == "(no DHCP reservations)"
+
+
 class TestResourceFormatters:
     def test_resource_list(self) -> None:
         items = [
@@ -203,6 +239,11 @@ class TestResourceFormatters:
         # No name/ssid/domain → falls back to id as the label, not duplicated.
         result = format_resource_list([{"id": "x1", "type": "IPV4"}], "acl_rules")
         assert result == "x1 | type=IPV4"
+
+    def test_resource_list_dns_policies_surfaces_value(self) -> None:
+        items = [{"id": "d1", "domain": "nas.lan", "type": "A_RECORD", "ipAddress": "10.1.1.20", "enabled": True}]
+        result = format_resource_list(items, "dns_policies")
+        assert result == "nas.lan | type=A_RECORD | value=10.1.1.20 | enabled | id=d1"
 
     def test_resource_detail(self) -> None:
         item = {"id": "p1", "name": "P", "source": {"zoneId": "z1"}, "enabled": True}

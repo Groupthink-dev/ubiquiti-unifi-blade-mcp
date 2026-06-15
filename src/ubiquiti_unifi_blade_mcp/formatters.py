@@ -259,6 +259,25 @@ def format_client_detail(client: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def format_dhcp_reservations(reservations: list[dict[str, Any]]) -> str:
+    """Format DHCP reservation evidence as compact lines."""
+    if not reservations:
+        return "(no DHCP reservations)"
+    lines = []
+    for reservation in reservations:
+        parts = [
+            str(reservation.get("name") or reservation.get("mac") or "?"),
+            str(reservation.get("mac") or "?"),
+            f"ip={reservation.get('ip', '?')}",
+        ]
+        if reservation.get("network"):
+            parts.append(f"network={reservation['network']}")
+        elif reservation.get("network_id"):
+            parts.append(f"network_id={reservation['network_id']}")
+        lines.append(" | ".join(parts))
+    return "\n".join(lines)
+
+
 # ------------------------------------------------------------------
 # WLANs
 # ------------------------------------------------------------------
@@ -354,6 +373,25 @@ def format_zone_list(zones: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def format_dns_records(records: list[dict[str, Any]]) -> str:
+    """Format Local DNS Record evidence as compact lines."""
+    if not records:
+        return "(no DNS records)"
+    lines = []
+    for record in records:
+        parts = [
+            str(record.get("name") or "?"),
+            str(record.get("type") or "?"),
+            f"value={record.get('value', '?')}",
+        ]
+        ttl = record.get("ttl")
+        if ttl not in (None, ""):
+            parts.append(f"ttl={ttl}")
+        parts.append("enabled" if record.get("enabled", True) else "DISABLED")
+        lines.append(" | ".join(parts))
+    return "\n".join(lines)
+
+
 # ------------------------------------------------------------------
 # Generic Integration-API resources (wifi, firewall, acl, dns, vouchers, …)
 # ------------------------------------------------------------------
@@ -362,6 +400,7 @@ def format_zone_list(zones: list[dict[str, Any]]) -> str:
 _RESOURCE_LABEL_KEYS = ("name", "ssid", "domain", "displayName", "description")
 # Compact summary fields appended as key=value when present.
 _RESOURCE_SUMMARY_KEYS = ("type", "action", "vlanId", "vlan", "purpose", "management")
+_DNS_POLICY_VALUE_KEYS = ("value", "target", "ipAddress", "ip_address", "canonicalName", "canonical_name")
 
 
 def format_resource_list(items: list[dict[str, Any]], resource: str = "") -> str:
@@ -376,6 +415,10 @@ def format_resource_list(items: list[dict[str, Any]], resource: str = "") -> str
             v = it.get(k)
             if v not in (None, ""):
                 parts.append(f"{k}={v}")
+        if resource == "dns_policies":
+            value = next((it[k] for k in _DNS_POLICY_VALUE_KEYS if it.get(k) not in (None, "")), None)
+            if value is not None:
+                parts.append(f"value={value}")
         if "enabled" in it:
             parts.append("enabled" if it.get("enabled") else "DISABLED")
         iid = it.get("id") or it.get("_id")

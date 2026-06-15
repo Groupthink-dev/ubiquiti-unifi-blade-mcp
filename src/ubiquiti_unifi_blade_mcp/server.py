@@ -21,6 +21,8 @@ from ubiquiti_unifi_blade_mcp.formatters import (
     format_client_list,
     format_device_detail,
     format_device_list,
+    format_dhcp_reservations,
+    format_dns_records,
     format_dpi,
     format_firewall_policies,
     format_info,
@@ -83,13 +85,16 @@ mcp = FastMCP(
     "UniFiBlade",
     instructions=(
         "Ubiquiti UniFi network operations. Monitor devices, view clients, "
-        "inspect firewall policies, check traffic routes, and manage WLANs. "
+        "inspect firewall policies, check traffic routes, audit DHCP reservations "
+        "and Local DNS Records, and manage WLANs. "
         "Manage networks/VLANs (list/create/update/delete) and network/firewall zones via the official "
-        "Integration API — these tools require an API key (UNIFI_API_KEY). "
+        "Integration API; generic resource create/update/delete also use that API and require an API key "
+        "(UNIFI_API_KEY). "
         "Multi-controller support — call unifi_controllers to list configured consoles, then "
         "pass controller= to target one. Omitting controller uses the default (first) console on "
         "reads; mutating tools require an explicit controller when more than one is configured. "
-        "Write operations (block/unblock, WLAN toggle, restart, network create/update/delete) "
+        "Write operations (block/unblock, WLAN toggle, restart, network create/update/delete, "
+        "resource create/update/delete) "
         "require UNIFI_WRITE_ENABLED=true; destructive ones also require confirm=true."
     ),
 )
@@ -247,6 +252,19 @@ async def unifi_zones(
         return _error_response(e)
 
 
+@mcp.tool()
+@_audited
+async def unifi_dns_records(
+    controller: Annotated[str | None, Field(description="Controller; omit->default (writes need it if >1)")] = None,
+) -> str:
+    """List Local DNS Records from Integration-API dns_policies evidence. Requires UNIFI_API_KEY."""
+    try:
+        records = await _get_client().get_dns_records(controller)
+        return meta_tail(format_dns_records(records), len(records))
+    except UniFiError as e:
+        return _error_response(e)
+
+
 # ===========================================================================
 # DEVICES
 # ===========================================================================
@@ -311,6 +329,19 @@ async def unifi_client(
         if client is None:
             return f"Error: Client {mac} not found"
         return meta_tail(format_client_detail(client), 1)
+    except UniFiError as e:
+        return _error_response(e)
+
+
+@mcp.tool()
+@_audited
+async def unifi_dhcp_reservations(
+    controller: Annotated[str | None, Field(description="Controller; omit->default (writes need it if >1)")] = None,
+) -> str:
+    """List DHCP Reservation evidence from the legacy user endpoint."""
+    try:
+        reservations = await _get_client().get_dhcp_reservations(controller)
+        return meta_tail(format_dhcp_reservations(reservations), len(reservations))
     except UniFiError as e:
         return _error_response(e)
 
