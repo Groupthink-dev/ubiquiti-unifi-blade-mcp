@@ -45,6 +45,23 @@ class FakeClient:
             {"id": "n2", "name": "Guest", "vlan": 30, "enabled": False},
         ]
 
+    async def get_dns_records(self, controller: str | None) -> list[dict[str, Any]]:
+        return [
+            {"name": "unifi.sandybay.cc", "type": "A", "value": "10.1.40.1", "ttl": "auto", "enabled": True},
+            {
+                "name": "udm-sb.sandybay.cc",
+                "type": "CNAME",
+                "value": "unifi.sandybay.cc",
+                "ttl": 300,
+                "enabled": False,
+            },
+        ]
+
+    async def get_dhcp_reservations(self, controller: str | None) -> list[dict[str, Any]]:
+        return [
+            {"name": "Printer", "mac": "aa:bb:cc:dd:ee:ff", "fixed_ip": "10.1.40.25", "network": "IoT"},
+        ]
+
     async def unblock_client(self, mac: str, controller: str | None) -> None:
         return None
 
@@ -61,6 +78,24 @@ class TestMetaTail:
         assert meta["matched_total"] == 2
         assert meta["returned"] == 2
         assert "latency_ms" in meta and isinstance(meta["latency_ms"], int)
+
+    @pytest.mark.asyncio
+    async def test_dns_records_tool_carries_meta(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(server, "_get_client", lambda: FakeClient())
+        out = await server.unifi_dns_records()
+        payload, meta = _split_meta(out)
+        assert "value=10.1.40.1" in payload
+        assert meta["matched_total"] == 2
+        assert meta["returned"] == 2
+
+    @pytest.mark.asyncio
+    async def test_dhcp_reservations_tool_carries_meta(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(server, "_get_client", lambda: FakeClient())
+        out = await server.unifi_dhcp_reservations()
+        payload, meta = _split_meta(out)
+        assert "Printer | aa:bb:cc:dd:ee:ff | ip=10.1.40.25" in payload
+        assert meta["matched_total"] == 1
+        assert meta["returned"] == 1
 
     @pytest.mark.asyncio
     async def test_write_tool_carries_meta(self, mock_env_write: None, monkeypatch: pytest.MonkeyPatch) -> None:

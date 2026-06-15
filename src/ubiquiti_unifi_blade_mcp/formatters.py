@@ -260,6 +260,50 @@ def format_client_detail(client: dict[str, Any]) -> str:
 
 
 # ------------------------------------------------------------------
+# DHCP Reservations / Local DNS Records
+# ------------------------------------------------------------------
+
+
+def format_dhcp_reservation_list(reservations: list[dict[str, Any]]) -> str:
+    """Format DHCP Reservations as compact evidence lines."""
+    if not reservations:
+        return "(no DHCP reservations)"
+    lines = []
+    for reservation in reservations:
+        parts = [
+            str(reservation.get("name") or reservation.get("mac") or "?"),
+            str(reservation.get("mac") or "?"),
+            f"ip={reservation.get('fixed_ip', '?')}",
+        ]
+        network = reservation.get("network")
+        network_id = reservation.get("network_id")
+        if network:
+            parts.append(f"network={network}")
+        elif network_id:
+            parts.append(f"network_id={network_id}")
+        lines.append(" | ".join(parts))
+    return "\n".join(lines)
+
+
+def format_dns_record_list(records: list[dict[str, Any]]) -> str:
+    """Format Local DNS Records as compact evidence lines."""
+    if not records:
+        return "(no local DNS records)"
+    lines = []
+    for record in records:
+        ttl = record.get("ttl")
+        parts = [
+            str(record.get("name") or "?"),
+            str(record.get("type") or "?"),
+            f"value={record.get('value', '?')}",
+            f"ttl={ttl if ttl not in (None, '') else 'auto'}",
+            "enabled" if record.get("enabled", True) else "DISABLED",
+        ]
+        lines.append(" | ".join(parts))
+    return "\n".join(lines)
+
+
+# ------------------------------------------------------------------
 # WLANs
 # ------------------------------------------------------------------
 
@@ -364,12 +408,66 @@ _RESOURCE_LABEL_KEYS = ("name", "ssid", "domain", "displayName", "description")
 _RESOURCE_SUMMARY_KEYS = ("type", "action", "vlanId", "vlan", "purpose", "management")
 
 
+def _first_resource_value(item: dict[str, Any], keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = item.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return ""
+
+
+def _normalize_resource_dns_type(value: str) -> str:
+    record_type = value.strip().upper()
+    if record_type.endswith("_RECORD"):
+        record_type = record_type.removesuffix("_RECORD")
+    return record_type
+
+
+def _resource_truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value == 1
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes", "on"}
+    return False
+
+
+def _format_dns_policy_resource_line(item: dict[str, Any]) -> str | None:
+    label = _first_resource_value(item, ("name", "domain", "host", "hostname", "fqdn"))
+    raw_type = _first_resource_value(item, ("recordType", "record_type", "type"))
+    value = _first_resource_value(
+        item,
+        ("value", "content", "data", "ipAddress", "ip_address", "target", "canonicalName", "canonical_name"),
+    )
+    if not label or not raw_type or not value:
+        return None
+    ttl = item.get("ttl")
+    parts = [
+        label,
+        _normalize_resource_dns_type(raw_type),
+        f"value={value}",
+        f"ttl={ttl if ttl not in (None, '') else 'auto'}",
+    ]
+    if "enabled" in item:
+        parts.append("enabled" if _resource_truthy(item.get("enabled")) else "DISABLED")
+    iid = item.get("id") or item.get("_id")
+    if iid:
+        parts.append(f"id={iid}")
+    return " | ".join(parts)
+
+
 def format_resource_list(items: list[dict[str, Any]], resource: str = "") -> str:
     """Generic compact formatter for an Integration-API resource list."""
     if not items:
         return f"(no {resource or 'items'})"
     lines = []
     for it in items:
+        if resource == "dns_policies":
+            dns_line = _format_dns_policy_resource_line(it)
+            if dns_line:
+                lines.append(dns_line)
+                continue
         label = next((str(it[k]) for k in _RESOURCE_LABEL_KEYS if it.get(k)), None)
         parts = [label or str(it.get("id") or it.get("_id") or "?")]
         for k in _RESOURCE_SUMMARY_KEYS:

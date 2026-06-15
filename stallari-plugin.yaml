@@ -1,6 +1,6 @@
 name: ubiquiti-unifi-blade-mcp
-version: "0.8.0"
-description: "Ubiquiti UniFi monitoring, security, and Integration-API resource management — device/client/firewall visibility plus CRUD for networks/VLANs, WiFi, firewall policies/zones, ACL rules, DNS policies, traffic-matching lists, and vouchers via the official Integration API"
+version: "0.9.0"
+description: "Ubiquiti UniFi monitoring, security, and Integration-API resource management — device/client/firewall visibility, DHCP reservations, Local DNS Records, plus CRUD for networks/VLANs, WiFi, firewall policies/zones, ACL rules, DNS policies, traffic-matching lists, and vouchers via the official Integration API"
 author: groupthink-dev
 license: MIT
 tier: certified
@@ -17,6 +17,8 @@ services:
     device: unifi_device
     clients: unifi_clients
     client: unifi_client
+    dhcp_reservations: unifi_dhcp_reservations
+    dns_records: unifi_dns_records
     firewall: unifi_firewall
     port_forwards: unifi_port_forwards
     traffic_routes: unifi_traffic_routes
@@ -51,7 +53,7 @@ setup:
   complexity: trivial
   icon: "wifi.router"
   product: "Ubiquiti UniFi"
-  blurb: "Monitor and manage your UniFi network — device health, connected clients, firewall policies, traffic routes, DPI restrictions, and network/VLAN creation. Multi-controller support for home and office."
+  blurb: "Monitor and manage your UniFi network — device health, connected clients, DHCP Reservations, Local DNS Records, firewall policies, traffic routes, DPI restrictions, and network/VLAN creation. Multi-controller support for home and office."
   fields:
     - key: UNIFI_HOST
       label: "Controller Host"
@@ -64,19 +66,19 @@ setup:
       secret: false
       required: false
       placeholder: "admin"
-      help: "Required for monitoring tools (device/client/firewall reads). Optional if only using network/VLAN tools via API key."
+      help: "Required for monitoring tools, connected clients, DHCP Reservations, and firewall reads. Optional if only using Integration API tools via API key."
     - key: UNIFI_PASSWORD
       label: "Password"
       secret: true
       required: false
       placeholder: "Controller password"
-      help: "Paired with username for monitoring tools. Optional if only using network/VLAN tools via API key."
+      help: "Paired with username for monitoring tools and DHCP Reservations. Optional if only using Integration API tools via API key."
     - key: UNIFI_API_KEY
       label: "Integration API Key"
       secret: true
       required: false
       placeholder: "X-API-KEY value"
-      help: "Generate in UniFi Network → Settings → Control Plane → Integrations. Required for network/VLAN tools (list/create/update/delete networks, list zones)."
+      help: "Generate in UniFi Network → Settings → Control Plane → Integrations. Required for Integration API tools (networks, zones, Local DNS Records, generic resources)."
     - key: UNIFI_PORT
       label: "Port"
       type: string
@@ -94,7 +96,7 @@ setup:
       type: boolean
       secret: false
       required: false
-      help: "Allow client blocking, WLAN toggling, and device restarts"
+      help: "Allow writes: client block/unblock/reconnect, WLAN and traffic-route toggles, device restart, network CRUD, and generic Integration API resource CRUD"
   test:
     tool: unifi_info
     expect: "connected"
@@ -125,10 +127,10 @@ env:
     description: "Base32-encoded TOTP secret for 2FA"
     secret: true
   - name: UNIFI_API_KEY
-    description: "Integration API key (X-API-KEY) — required for network/VLAN tools"
+    description: "Integration API key (X-API-KEY) — required for Integration API tools"
     secret: true
   - name: UNIFI_WRITE_ENABLED
-    description: "Enable write operations (block, toggle, restart)"
+    description: "Enable writes: client block/unblock/reconnect, WLAN and traffic-route toggles, device restart, network CRUD, and generic Integration API resource CRUD"
     default: "false"
   - name: UNIFI_CONTROLLERS
     description: "Multi-controller: comma-separated names (e.g. home,office)"

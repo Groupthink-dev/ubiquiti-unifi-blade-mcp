@@ -433,6 +433,114 @@ class TestGenericIntegrationResources:
             await client.integration_list("bogus")
 
 
+class TestEvidenceClient:
+    async def test_get_dns_records_normalizes_filters_and_sorts(
+        self, mock_env_apikey: None, mocker: MockerFixture
+    ) -> None:
+        client = UniFiClient()
+        mocker.patch.object(
+            client,
+            "integration_list",
+            return_value=[
+                {
+                    "id": "d2",
+                    "domain": "udm-sb.sandybay.cc",
+                    "record_type": "CNAME_RECORD",
+                    "target": "unifi.sandybay.cc",
+                    "ttl": 300,
+                    "enabled": "false",
+                },
+                {"id": "x", "domain": "filter-policy", "action": "BLOCK"},
+                {
+                    "id": "d1",
+                    "domain": "Unifi.sandybay.cc",
+                    "type": "A_RECORD",
+                    "value": "10.1.40.1",
+                    "ttl": None,
+                    "enabled": True,
+                },
+            ],
+        )
+
+        records = await client.get_dns_records()
+
+        assert records == [
+            {
+                "name": "udm-sb.sandybay.cc",
+                "type": "CNAME",
+                "value": "unifi.sandybay.cc",
+                "ttl": 300,
+                "enabled": False,
+            },
+            {"name": "Unifi.sandybay.cc", "type": "A", "value": "10.1.40.1", "ttl": "auto", "enabled": True},
+        ]
+
+    async def test_get_dhcp_reservations_uses_rest_user_and_filters(
+        self, mock_env: None, mocker: MockerFixture
+    ) -> None:
+        client = UniFiClient()
+        fake_ctrl = mocker.MagicMock()
+        fake_ctrl.connectivity.config.site = "default"
+        fake_ctrl.request = mocker.AsyncMock(
+            return_value={
+                "data": [
+                    {
+                        "name": "Camera",
+                        "mac": "AA:BB:CC:DD:EE:FF",
+                        "use_fixedip": "true",
+                        "fixed_ip": "10.1.50.10",
+                        "network_id": "net50",
+                    },
+                    {
+                        "hostname": "printer.local",
+                        "mac": "11:22:33:44:55:66",
+                        "use_fixedip": True,
+                        "fixed_ip": "10.1.40.25",
+                        "fixed_ip_subnet": "10.1.40.0/24",
+                    },
+                    {"name": "Dynamic", "mac": "22:33:44:55:66:77", "use_fixedip": False, "ip": "10.1.40.99"},
+                    {"name": "Missing IP", "mac": "33:44:55:66:77:88", "use_fixedip": True},
+                    {
+                        "name": "Disabled",
+                        "mac": "44:55:66:77:88:99",
+                        "use_fixedip": True,
+                        "fixed_ip": "10.1.40.26",
+                        "fixed_ip_enabled": False,
+                    },
+                    {
+                        "name": "Disabled String",
+                        "mac": "55:66:77:88:99:aa",
+                        "use_fixedip": True,
+                        "fixed_ip": "10.1.40.27",
+                        "fixedIpDisabled": "true",
+                    },
+                ]
+            }
+        )
+        mocker.patch.object(client, "_call", return_value=fake_ctrl)
+
+        reservations = await client.get_dhcp_reservations()
+
+        req = fake_ctrl.request.await_args.args[0]
+        assert req.method == "get"
+        assert req.path == "/api/s/default/rest/user"
+        assert req.data is None
+        assert reservations == [
+            {
+                "name": "printer.local",
+                "mac": "11:22:33:44:55:66",
+                "fixed_ip": "10.1.40.25",
+                "network": "10.1.40.0/24",
+            },
+            {
+                "name": "Camera",
+                "mac": "aa:bb:cc:dd:ee:ff",
+                "fixed_ip": "10.1.50.10",
+                "network_id": "net50",
+            },
+        ]
+
+
 class TestDualAuthMode:
     """Prove a controller with both session creds AND an API key serves both tool families.
 

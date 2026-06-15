@@ -11,6 +11,8 @@ from ubiquiti_unifi_blade_mcp.formatters import (
     format_device_detail,
     format_device_line,
     format_device_list,
+    format_dhcp_reservation_list,
+    format_dns_record_list,
     format_dpi,
     format_firewall_policies,
     format_info,
@@ -147,6 +149,44 @@ class TestClientFormatters:
         assert "5.0GB" in result
 
 
+class TestEvidenceFormatters:
+    def test_dns_record_list_exact(self) -> None:
+        records = [
+            {"name": "unifi.sandybay.cc", "type": "A", "value": "10.1.40.1", "ttl": "auto", "enabled": True},
+            {
+                "name": "udm-sb.sandybay.cc",
+                "type": "CNAME",
+                "value": "unifi.sandybay.cc",
+                "ttl": 300,
+                "enabled": False,
+            },
+        ]
+
+        assert (
+            format_dns_record_list(records) == "unifi.sandybay.cc | A | value=10.1.40.1 | ttl=auto | enabled\n"
+            "udm-sb.sandybay.cc | CNAME | value=unifi.sandybay.cc | ttl=300 | DISABLED"
+        )
+
+    def test_dns_record_list_empty(self) -> None:
+        assert format_dns_record_list([]) == "(no local DNS records)"
+
+    def test_dhcp_reservation_list_exact(self) -> None:
+        reservations = [
+            {"name": "Printer", "mac": "aa:bb:cc:dd:ee:ff", "fixed_ip": "10.1.40.25", "network": "IoT"},
+            {"name": "Camera", "mac": "11:22:33:44:55:66", "fixed_ip": "10.1.50.10", "network_id": "abc123"},
+            {"name": "Sensor", "mac": "22:33:44:55:66:77", "fixed_ip": "10.1.60.10"},
+        ]
+
+        assert (
+            format_dhcp_reservation_list(reservations) == "Printer | aa:bb:cc:dd:ee:ff | ip=10.1.40.25 | network=IoT\n"
+            "Camera | 11:22:33:44:55:66 | ip=10.1.50.10 | network_id=abc123\n"
+            "Sensor | 22:33:44:55:66:77 | ip=10.1.60.10"
+        )
+
+    def test_dhcp_reservation_list_empty(self) -> None:
+        assert format_dhcp_reservation_list([]) == "(no DHCP reservations)"
+
+
 class TestWlanFormatters:
     def test_wlan_list(self, sample_wlans: list[dict[str, Any]]) -> None:
         result = format_wlan_list(sample_wlans)
@@ -203,6 +243,32 @@ class TestResourceFormatters:
         # No name/ssid/domain → falls back to id as the label, not duplicated.
         result = format_resource_list([{"id": "x1", "type": "IPV4"}], "acl_rules")
         assert result == "x1 | type=IPV4"
+
+    def test_resource_list_dns_policies_surfaces_value(self) -> None:
+        items: list[dict[str, Any]] = [
+            {
+                "id": "d1",
+                "domain": "unifi.sandybay.cc",
+                "type": "A_RECORD",
+                "value": "10.1.40.1",
+                "ttl": None,
+                "enabled": True,
+            },
+            {
+                "id": "d2",
+                "domain": "udm-sb.sandybay.cc",
+                "record_type": "CNAME_RECORD",
+                "target": "unifi.sandybay.cc",
+                "ttl": 300,
+                "enabled": "false",
+            },
+        ]
+
+        assert (
+            format_resource_list(items, "dns_policies")
+            == "unifi.sandybay.cc | A | value=10.1.40.1 | ttl=auto | enabled | id=d1\n"
+            "udm-sb.sandybay.cc | CNAME | value=unifi.sandybay.cc | ttl=300 | DISABLED | id=d2"
+        )
 
     def test_resource_detail(self) -> None:
         item = {"id": "p1", "name": "P", "source": {"zoneId": "z1"}, "enabled": True}

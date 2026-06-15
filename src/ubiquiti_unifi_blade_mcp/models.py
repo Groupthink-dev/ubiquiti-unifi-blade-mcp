@@ -37,7 +37,7 @@ class ControllerConfig:
         cookie/CSRF) drives the legacy ``/api/s/...`` controller API used by the
         monitoring tools via aiounifi; ``apikey`` (``X-API-KEY``) drives the
         official stateless Integration API (``/proxy/network/integration/v1/...``)
-        used by the network/VLAN tools.
+        used by Integration API tools.
         """
         return "apikey" if self.api_key else "session"
 
@@ -94,7 +94,7 @@ def parse_controllers() -> list[ControllerConfig]:
         raise ValueError(
             "UniFi credentials not configured. Set UNIFI_HOST plus either "
             "UNIFI_USERNAME + UNIFI_PASSWORD (monitoring tools) or UNIFI_API_KEY "
-            "(network/VLAN tools via the Integration API)."
+            "(Integration API tools)."
         )
     return [
         ControllerConfig(

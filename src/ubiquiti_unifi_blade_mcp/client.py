@@ -100,6 +100,26 @@ def _zone_candidates_message(zones: list[dict[str, Any]]) -> str:
     return ", ".join(f"{_zone_label(z)} (id={_zone_id(z) or '?'})" for z in zones)
 
 
+def _first_non_empty(item: dict[str, Any], keys: tuple[str, ...]) -> str:
+    """Return the first non-empty scalar value from ``item`` as a string."""
+    for key in keys:
+        value = item.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return ""
+
+
+def _truthy(value: Any) -> bool:
+    """Accept common JSON-ish truthy spellings used by legacy controller payloads."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value == 1
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes", "on"}
+    return False
+
+
 def _is_default_network_zone(zone: dict[str, Any]) -> bool:
     """True for the unambiguous default/internal network zone candidates.
 
@@ -212,12 +232,12 @@ class UniFiClient:
         config = self._get_config(name)
 
         # Session (cookie/CSRF) auth requires username + password. An api-key-only
-        # controller can still serve the network/VLAN tools (Integration API),
+        # controller can still serve the Integration API tools,
         # but not the aiounifi-backed monitoring tools — fail with a clear hint.
         if not (config.username and config.password):
             raise UniFiError(
                 f"Controller '{name}' has no username/password — this tool requires "
-                "session auth. Only the network/VLAN tools work in API-key-only mode."
+                "session auth. Only Integration API tools work in API-key-only mode."
             )
 
         # Create SSL context
@@ -452,6 +472,54 @@ class UniFiClient:
             "ap_mac": getattr(client, "ap_mac", ""),
         }
 
+    @staticmethod
+    def _normalize_dhcp_reservation(item: dict[str, Any]) -> dict[str, Any] | None:
+        """Normalize one legacy ``rest/user`` row into a DHCP Reservation, or skip it."""
+        if not _truthy(item.get("use_fixedip")):
+            return None
+        if _truthy(item.get("fixedIpDisabled")) or _truthy(item.get("fixed_ip_disabled")):
+            return None
+        if any(key in item and not _truthy(item.get(key)) for key in ("fixed_ip_enabled", "fixedIpEnabled")):
+            return None
+
+        fixed_ip = _first_non_empty(item, ("fixed_ip", "fixedIp", "ip"))
+        mac = _first_non_empty(item, ("mac", "macAddress", "mac_address")).lower()
+        if not fixed_ip or not mac:
+            return None
+
+        label = _first_non_empty(item, ("name", "hostname")) or mac
+        reservation: dict[str, Any] = {
+            "name": label,
+            "mac": mac,
+            "fixed_ip": fixed_ip,
+        }
+        network = _first_non_empty(item, ("network", "network_name", "networkName", "fixed_ip_subnet", "fixedIpSubnet"))
+        network_id = _first_non_empty(item, ("network_id", "networkId"))
+        if network:
+            reservation["network"] = network
+        elif network_id:
+            reservation["network_id"] = network_id
+        return reservation
+
+    async def get_dhcp_reservations(self, controller: str | None = None) -> list[dict[str, Any]]:
+        """Get DHCP Reservations from the legacy user table, including offline clients."""
+        ctrl = await self._call(controller)
+        site = ctrl.connectivity.config.site
+        try:
+            data = await ctrl.request(ApiRequest("get", f"/api/s/{site}/rest/user", None))
+        except Exception as e:
+            raise UniFiError(_scrub(f"Failed to fetch DHCP reservations: {e}")) from e
+
+        items = data.get("data", []) if isinstance(data, dict) else (data or [])
+        reservations = [
+            reservation
+            for item in items
+            if isinstance(item, dict)
+            for reservation in [self._normalize_dhcp_reservation(item)]
+            if reservation is not None
+        ]
+        return sorted(reservations, key=self._dhcp_reservation_sort_key)
+
     async def block_client(self, mac: str, controller: str | None = None) -> bool:
         """Block a client."""
         ctrl = await self._call(controller)
@@ -666,7 +734,7 @@ class UniFiClient:
         return sites
 
     # ------------------------------------------------------------------
-    # Integration API (X-API-KEY) — networks / VLANs + generic resources
+    # Integration API (X-API-KEY) — networks / VLANs, Local DNS Records, generic resources
     # ------------------------------------------------------------------
 
     async def _integration_request(
@@ -680,13 +748,13 @@ class UniFiClient:
         """Make a request against the official UniFi Network Integration API.
 
         Stateless: authenticates with ``X-API-KEY`` (no login/CSRF). Used by the
-        network/VLAN tools. Requires ``api_key`` on the target controller.
+        Integration API tools. Requires ``api_key`` on the target controller.
         """
         config = self._get_config(controller)
         if not config.api_key:
             raise UniFiError(
                 f"Controller '{config.name}' has no API key. Set UNIFI_API_KEY "
-                f"(or UNIFI_{config.name.upper()}_API_KEY) to use network/VLAN tools."
+                f"(or UNIFI_{config.name.upper()}_API_KEY) to use Integration API tools."
             )
 
         session = self._ensure_integration_session(config.name)
@@ -855,6 +923,65 @@ class UniFiClient:
         site_id = await self._resolve_integration_site_id(controller)
         await self._integration_request("delete", f"sites/{site_id}/{path}/{item_id}", controller=controller)
         return True
+
+    @staticmethod
+    def _normalize_dns_type(value: str) -> str:
+        """Normalize UniFi record type enums to standard DNS type labels."""
+        record_type = value.strip().upper()
+        if record_type.endswith("_RECORD"):
+            record_type = record_type.removesuffix("_RECORD")
+        return record_type
+
+    @staticmethod
+    def _normalize_dns_record(item: dict[str, Any]) -> dict[str, Any] | None:
+        """Normalize one Integration-API DNS policy into a Local DNS Record, or skip it."""
+        name = _first_non_empty(item, ("name", "domain", "host", "hostname", "fqdn"))
+        raw_type = _first_non_empty(item, ("recordType", "record_type", "type"))
+        value = _first_non_empty(
+            item,
+            (
+                "value",
+                "content",
+                "data",
+                "ipAddress",
+                "ip_address",
+                "target",
+                "canonicalName",
+                "canonical_name",
+            ),
+        )
+        if not name or not raw_type or not value:
+            return None
+        ttl = item.get("ttl")
+        return {
+            "name": name,
+            "type": UniFiClient._normalize_dns_type(raw_type),
+            "value": value,
+            "ttl": ttl if ttl not in (None, "") else "auto",
+            "enabled": _truthy(item.get("enabled")) if "enabled" in item else True,
+        }
+
+    async def get_dns_records(self, controller: str | None = None) -> list[dict[str, Any]]:
+        """Get Local DNS Records from the official Integration API."""
+        items = await self.integration_list("dns_policies", controller)
+        records = [
+            record
+            for item in items
+            if isinstance(item, dict)
+            for record in [self._normalize_dns_record(item)]
+            if record is not None
+        ]
+        return sorted(records, key=lambda r: (str(r["name"]).lower(), str(r["type"]), str(r["value"]).lower()))
+
+    @staticmethod
+    def _dhcp_reservation_sort_key(item: dict[str, Any]) -> tuple[int, int, str, str]:
+        """Sort DHCP Reservations by IP address when possible, then stable text fields."""
+        ip = str(item.get("fixed_ip", ""))
+        try:
+            parsed = ipaddress.ip_address(ip)
+            return (0, parsed.version, f"{int(parsed):039d}", str(item.get("mac", "")))
+        except ValueError:
+            return (1, 0, str(item.get("name", "")).lower(), str(item.get("mac", "")))
 
     @staticmethod
     def _normalize_network(n: dict[str, Any]) -> dict[str, Any]:
