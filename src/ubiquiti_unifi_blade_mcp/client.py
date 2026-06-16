@@ -504,9 +504,8 @@ class UniFiClient:
     async def get_dhcp_reservations(self, controller: str | None = None) -> list[dict[str, Any]]:
         """Get DHCP Reservations from the legacy user table, including offline clients."""
         ctrl = await self._call(controller)
-        site = ctrl.connectivity.config.site
         try:
-            data = await ctrl.request(ApiRequest("get", f"/api/s/{site}/rest/user", None))
+            data = await ctrl.request(ApiRequest("get", "/rest/user", None))
         except Exception as e:
             raise UniFiError(_scrub(f"Failed to fetch DHCP reservations: {e}")) from e
 

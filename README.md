@@ -4,7 +4,7 @@
 
 An MCP server that gives AI agents structured access to Ubiquiti UniFi network controllers. Built for the [Model Context Protocol](https://modelcontextprotocol.io) with security visibility and token efficiency as first-class design goals.
 
-> **Beta.** Monitoring (read) and Integration-API network/VLAN CRUD are live-verified across multiple UniFi OS 10.x consoles. The GATEWAY (routed) create path applies conservative defaults and is verified for the common DHCP case. A full live e2e suite against a disposable sandbox controller is planned ([DD-382]) before a 1.0 stable label.
+> **Beta.** Monitoring (read) and Integration-API network/VLAN CRUD are live-verified across multiple UniFi OS 10.x consoles. The GATEWAY (routed) create path applies conservative defaults and is verified for the common DHCP case. A disposable UniFi OS Server sandbox is now available for live development and write-path e2e work; see [Development Sandbox](docs/development-sandbox.md).
 
 ## Why this exists
 
@@ -307,6 +307,30 @@ make test           # Unit tests (mocked, no controller needed)
 make check          # Lint + format + type-check
 make run            # Start MCP server (stdio)
 ```
+
+### Live development sandbox
+
+A disposable UniFi OS Server VM is available for live `ubiquiti-unifi-blade-mcp`
+development:
+
+```text
+https://10.1.70.14:11443
+```
+
+Use `UNIFI_HOST=10.1.70.14`, `UNIFI_PORT=11443`, and `UNIFI_VERIFY_SSL=false`
+with the sandbox credentials/API key from `1p/infra/unifi-test`. The
+`unifi-test.gen3.dev` hostname is only available where the static hostname from
+`unifi.paddington.cc` is in effect. Reset to the clean baseline from Starbase
+before stateful or mutating suites:
+
+```bash
+cd /Users/piers/src/starbase
+scripts/truenas-unifi-fixture.py fresh --apply --wait-ready
+```
+
+The VM was built as an Ubuntu 24.04 Noble cloud-init full VM running UniFi OS
+Server. Full workflow and provenance are in
+[docs/development-sandbox.md](docs/development-sandbox.md).
 
 ### Architecture
 

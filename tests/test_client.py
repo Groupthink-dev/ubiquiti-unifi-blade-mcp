@@ -523,7 +523,7 @@ class TestEvidenceClient:
 
         req = fake_ctrl.request.await_args.args[0]
         assert req.method == "get"
-        assert req.path == "/api/s/default/rest/user"
+        assert req.path == "/rest/user"
         assert req.data is None
         assert reservations == [
             {

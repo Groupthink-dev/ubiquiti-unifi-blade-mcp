@@ -1,5 +1,5 @@
 name: ubiquiti-unifi-blade-mcp
-version: "0.9.0"
+version: "0.9.1"
 description: "Ubiquiti UniFi monitoring, security, and Integration-API resource management — device/client/firewall visibility, DHCP reservations, Local DNS Records, plus CRUD for networks/VLANs, WiFi, firewall policies/zones, ACL rules, DNS policies, traffic-matching lists, and vouchers via the official Integration API"
 author: groupthink-dev
 license: MIT
@@ -118,7 +118,7 @@ env:
     description: "Controller admin password"
     secret: true
   - name: UNIFI_PORT
-    description: "Controller port (443 for UniFi OS, 8443 for classic)"
+    description: "Controller port (443 for UniFi OS, 11443 for UniFi OS Server, 8443 for classic)"
     default: "443"
   - name: UNIFI_VERIFY_SSL
     description: "Verify SSL certificates (false for self-signed)"
