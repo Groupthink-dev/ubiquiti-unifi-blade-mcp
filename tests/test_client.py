@@ -128,7 +128,7 @@ class TestNetworkClient:
             return_value={"data": [{"id": "n1", "name": "Services", "vlanId": 40, "enabled": True}]},
         )
         nets = await client.get_networks()
-        req.assert_awaited_once_with("get", "sites/SITE-UUID/networks", controller=None)
+        req.assert_awaited_once_with("get", "sites/SITE-UUID/networks?limit=200&offset=0", controller=None)
         assert nets[0]["name"] == "Services"
         assert nets[0]["vlan"] == 40
 
@@ -396,8 +396,42 @@ class TestGenericIntegrationResources:
             client, "_integration_request", return_value={"data": [{"id": "w1", "name": "Guest WiFi"}]}
         )
         items = await client.integration_list("wifi")
-        req.assert_awaited_once_with("get", "sites/S/wifi/broadcasts", controller=None)
+        req.assert_awaited_once_with("get", "sites/S/wifi/broadcasts?limit=200&offset=0", controller=None)
         assert items[0]["name"] == "Guest WiFi"
+
+    async def test_list_paginates_until_total_count(self, mock_env_apikey: None, mocker: MockerFixture) -> None:
+        client = UniFiClient()
+        mocker.patch.object(client, "_resolve_integration_site_id", return_value="S")
+
+        async def fake_request(method: str, path: str, **kwargs: object) -> dict[str, object]:
+            assert method == "get"
+            assert kwargs == {"controller": None}
+            if path == "sites/S/firewall/policies?limit=200&offset=0":
+                return {
+                    "offset": 0,
+                    "limit": 200,
+                    "count": 200,
+                    "totalCount": 210,
+                    "data": [{"id": f"p{i}"} for i in range(200)],
+                }
+            if path == "sites/S/firewall/policies?limit=200&offset=200":
+                return {
+                    "offset": 200,
+                    "limit": 200,
+                    "count": 10,
+                    "totalCount": 210,
+                    "data": [{"id": f"p{i}"} for i in range(200, 210)],
+                }
+            raise AssertionError(f"unexpected Integration API path: {path}")
+
+        req = mocker.patch.object(client, "_integration_request", side_effect=fake_request)
+        items = await client.integration_list("firewall_policies")
+
+        assert [item["id"] for item in items] == [f"p{i}" for i in range(210)]
+        assert [call.args[1] for call in req.await_args_list] == [
+            "sites/S/firewall/policies?limit=200&offset=0",
+            "sites/S/firewall/policies?limit=200&offset=200",
+        ]
 
     async def test_get_path(self, mock_env_apikey: None, mocker: MockerFixture) -> None:
         client = UniFiClient()

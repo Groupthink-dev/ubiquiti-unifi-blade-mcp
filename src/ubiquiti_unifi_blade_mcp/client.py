@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 # Base path for the official UniFi Network Integration API (X-API-KEY auth).
 _INTEGRATION_BASE = "proxy/network/integration/v1"
+_INTEGRATION_LIST_LIMIT = 200
 
 # Logical resource name -> (path under sites/{siteId}/, read_only) for the Integration API.
 # Paths verified against the Art-of-WiFi v10 client + UniFi developer docs (Network 10.1.84
@@ -855,8 +856,34 @@ class UniFiClient:
         """List items of an Integration-API resource (unwraps the paginated ``data`` envelope)."""
         path, _ = self._resource_path(resource)
         site_id = await self._resolve_integration_site_id(controller)
-        data = await self._integration_request("get", f"sites/{site_id}/{path}", controller=controller)
-        return data.get("data", []) if isinstance(data, dict) else (data or [])
+        items: list[dict[str, Any]] = []
+        offset = 0
+        limit = _INTEGRATION_LIST_LIMIT
+
+        while True:
+            data = await self._integration_request(
+                "get", f"sites/{site_id}/{path}?limit={limit}&offset={offset}", controller=controller
+            )
+            if not isinstance(data, dict):
+                return data or []
+
+            page_items = data.get("data", [])
+            if not isinstance(page_items, list):
+                return items
+
+            items.extend(page_items)
+            count = data.get("count")
+            page_count = count if isinstance(count, int) else len(page_items)
+            total_count = data.get("totalCount")
+            if isinstance(total_count, int) and offset + page_count >= total_count:
+                return items
+            if page_count < limit:
+                return items
+
+            next_offset = offset + page_count
+            if next_offset <= offset:
+                return items
+            offset = next_offset
 
     async def integration_get(
         self, resource: str, item_id: str, controller: str | None = None
