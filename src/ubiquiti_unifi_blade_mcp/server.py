@@ -444,7 +444,8 @@ async def unifi_sitemagic_networks(
     Reads the legacy controller API (session auth — requires username/password);
     the official Integration API exposes no Site Magic subnet detail. Each line:
     tunnel name, WireGuard ifname, peer site id, and the remote_vpn_subnets
-    (CIDRs of the PEER site reachable over the mesh). Empty output can also mean
+    (CIDRs the PEER site advertises into the mesh — routing intent,
+    not evidence the route currently converges). Empty output can also mean
     the account's read scope hides site-vpn rows — it is evidence of visibility,
     not proof Site Magic is unconfigured.
     """
