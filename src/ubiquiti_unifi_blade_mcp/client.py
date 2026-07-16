@@ -520,6 +520,40 @@ class UniFiClient:
         ]
         return sorted(reservations, key=self._dhcp_reservation_sort_key)
 
+    @staticmethod
+    def _normalize_sitemagic_tunnel(item: dict[str, Any]) -> dict[str, Any] | None:
+        """Normalize one legacy networkconf row into a Site Magic tunnel, or skip it."""
+        if item.get("purpose") != "site-vpn":
+            return None
+        raw_peer = str(item.get("sdwan_remote_site_id") or "")
+        if not raw_peer:
+            return None
+        subnets = item.get("remote_vpn_subnets") or []
+        return {
+            "name": _first_non_empty(item, ("name", "ifname")) or "?",
+            "ifname": str(item.get("ifname") or ""),
+            "peer_site_id": raw_peer.split("/")[-1],
+            "remote_vpn_subnets": [str(subnet) for subnet in subnets if subnet],
+        }
+
+    async def get_sitemagic_networks(self, controller: str | None = None) -> list[dict[str, Any]]:
+        """Get Site Magic tunnels and advertised peer subnets from legacy networkconf."""
+        ctrl = await self._call(controller)
+        try:
+            data = await ctrl.request(ApiRequest("get", "/rest/networkconf", None))
+        except Exception as e:
+            raise UniFiError(_scrub(f"Failed to fetch Site Magic networks: {e}")) from e
+
+        items = data.get("data", []) if isinstance(data, dict) else (data or [])
+        tunnels = [
+            tunnel
+            for item in items
+            if isinstance(item, dict)
+            for tunnel in [self._normalize_sitemagic_tunnel(item)]
+            if tunnel is not None
+        ]
+        return sorted(tunnels, key=lambda tunnel: (str(tunnel["name"]).lower(), str(tunnel["peer_site_id"])))
+
     async def block_client(self, mac: str, controller: str | None = None) -> bool:
         """Block a client."""
         ctrl = await self._call(controller)

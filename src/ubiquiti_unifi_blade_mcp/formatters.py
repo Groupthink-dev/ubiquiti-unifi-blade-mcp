@@ -285,6 +285,23 @@ def format_dhcp_reservation_list(reservations: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def format_sitemagic_network_list(tunnels: list[dict[str, Any]]) -> str:
+    """Format Site Magic tunnels and advertised peer subnets as compact evidence lines."""
+    if not tunnels:
+        return "(no Site Magic tunnels)"
+    lines = []
+    for tunnel in tunnels:
+        parts = [str(tunnel.get("name") or "?")]
+        ifname = tunnel.get("ifname")
+        if ifname:
+            parts.append(f"if={ifname}")
+        parts.append(f"peer_site={tunnel.get('peer_site_id', '?')}")
+        subnets = tunnel.get("remote_vpn_subnets") or []
+        parts.append(f"subnets={','.join(subnets) if subnets else '(none)'}")
+        lines.append(" | ".join(parts))
+    return "\n".join(lines)
+
+
 def format_dns_record_list(records: list[dict[str, Any]]) -> str:
     """Format Local DNS Records as compact evidence lines."""
     if not records:

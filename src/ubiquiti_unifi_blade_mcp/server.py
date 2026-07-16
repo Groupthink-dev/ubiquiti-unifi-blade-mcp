@@ -31,6 +31,7 @@ from ubiquiti_unifi_blade_mcp.formatters import (
     format_port_forwards,
     format_resource_detail,
     format_resource_list,
+    format_sitemagic_network_list,
     format_sites,
     format_traffic_routes,
     format_traffic_rules,
@@ -85,7 +86,8 @@ mcp = FastMCP(
     "UniFiBlade",
     instructions=(
         "Ubiquiti UniFi network operations. Monitor devices, view connected clients, "
-        "inspect DHCP Reservations, Local DNS Records, firewall policies, traffic routes, and manage WLANs. "
+        "inspect DHCP Reservations, Local DNS Records, Site Magic advertised subnets, "
+        "firewall policies, traffic routes, and manage WLANs. "
         "Manage networks/VLANs (list/create/update/delete) and network/firewall zones via the official "
         "Integration API — these tools require an API key (UNIFI_API_KEY). "
         "Multi-controller support — call unifi_controllers to list configured consoles, then "
@@ -428,6 +430,28 @@ async def unifi_dpi(
     try:
         dpi = await _get_client().get_dpi_restrictions(controller)
         return meta_tail(format_dpi(dpi), 1)
+    except UniFiError as e:
+        return _error_response(e)
+
+
+@mcp.tool()
+@_audited
+async def unifi_sitemagic_networks(
+    controller: Annotated[str | None, Field(description="Controller; omit→default (writes need it if >1)")] = None,
+) -> str:
+    """Site Magic (SD-WAN mesh) tunnels with the peer subnets advertised into the mesh.
+
+    Reads the legacy controller API (session auth — requires username/password);
+    the official Integration API exposes no Site Magic subnet detail. Each line:
+    tunnel name, WireGuard ifname, peer site id, and the remote_vpn_subnets
+    (CIDRs the PEER site advertises into the mesh — routing intent,
+    not evidence the route currently converges). Empty output can also mean
+    the account's read scope hides site-vpn rows — it is evidence of visibility,
+    not proof Site Magic is unconfigured.
+    """
+    try:
+        tunnels = await _get_client().get_sitemagic_networks(controller)
+        return meta_tail(format_sitemagic_network_list(tunnels), len(tunnels))
     except UniFiError as e:
         return _error_response(e)
 

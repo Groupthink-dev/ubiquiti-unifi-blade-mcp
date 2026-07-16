@@ -62,6 +62,16 @@ class FakeClient:
             {"name": "Printer", "mac": "aa:bb:cc:dd:ee:ff", "fixed_ip": "10.1.40.25", "network": "IoT"},
         ]
 
+    async def get_sitemagic_networks(self, controller: str | None) -> list[dict[str, Any]]:
+        return [
+            {
+                "name": "Site Magic MR",
+                "ifname": "wgsts1001",
+                "peer_site_id": "665a0c0000000000000000e1",
+                "remote_vpn_subnets": ["10.3.10.0/24"],
+            },
+        ]
+
     async def unblock_client(self, mac: str, controller: str | None) -> None:
         return None
 
@@ -94,6 +104,15 @@ class TestMetaTail:
         out = await server.unifi_dhcp_reservations()
         payload, meta = _split_meta(out)
         assert "Printer | aa:bb:cc:dd:ee:ff | ip=10.1.40.25" in payload
+        assert meta["matched_total"] == 1
+        assert meta["returned"] == 1
+
+    @pytest.mark.asyncio
+    async def test_sitemagic_networks_tool_carries_meta(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(server, "_get_client", lambda: FakeClient())
+        out = await server.unifi_sitemagic_networks()
+        payload, meta = _split_meta(out)
+        assert "Site Magic MR | if=wgsts1001" in payload
         assert meta["matched_total"] == 1
         assert meta["returned"] == 1
 

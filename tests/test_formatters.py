@@ -21,6 +21,7 @@ from ubiquiti_unifi_blade_mcp.formatters import (
     format_port_forwards,
     format_resource_detail,
     format_resource_list,
+    format_sitemagic_network_list,
     format_sites,
     format_traffic_routes,
     format_traffic_rules,
@@ -185,6 +186,26 @@ class TestEvidenceFormatters:
 
     def test_dhcp_reservation_list_empty(self) -> None:
         assert format_dhcp_reservation_list([]) == "(no DHCP reservations)"
+
+    def test_sitemagic_network_list_exact(self) -> None:
+        tunnels = [
+            {
+                "name": "Site Magic MR",
+                "ifname": "wgsts1001",
+                "peer_site_id": "665a0c0000000000000000e1",
+                "remote_vpn_subnets": ["10.3.10.0/24", "10.3.20.0/24"],
+            },
+            {"name": "Branch", "peer_site_id": "665b0000000000000000e2", "remote_vpn_subnets": []},
+        ]
+
+        assert (
+            format_sitemagic_network_list(tunnels)
+            == "Site Magic MR | if=wgsts1001 | peer_site=665a0c0000000000000000e1 | subnets=10.3.10.0/24,10.3.20.0/24\n"
+            "Branch | peer_site=665b0000000000000000e2 | subnets=(none)"
+        )
+
+    def test_sitemagic_network_list_empty(self) -> None:
+        assert format_sitemagic_network_list([]) == "(no Site Magic tunnels)"
 
 
 class TestWlanFormatters:
