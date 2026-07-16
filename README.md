@@ -10,7 +10,7 @@ An MCP server that gives AI agents structured access to Ubiquiti UniFi network c
 
 UniFi controllers expose a rich but undocumented REST API behind cookie-based auth with CSRF tokens and optional 2FA. The [aiounifi](https://github.com/Kane610/aiounifi) library (MIT, powers the Home Assistant integration) handles the protocol complexity — UniFi OS vs classic controller detection, TOTP 2FA, websocket events. This MCP wraps it with the guardrails that automated agents need:
 
-- **Security-first tool set** — 32 tools focused on what network security agents actually need: device health, connected-client visibility, DHCP Reservations, Local DNS Records, firewall state, traffic rules, DPI restrictions, port forwards, network/VLANs, and Integration-API resources. Not 161 tools for every possible configuration change.
+- **Security-first tool set** — 33 tools focused on what network security agents actually need: device health, connected-client visibility, DHCP Reservations, Local DNS Records, Site Magic advertised subnets, firewall state, traffic rules, DPI restrictions, port forwards, network/VLANs, and Integration-API resources. Not 161 tools for every possible configuration change.
 - **Token-efficient output** — compact pipe-delimited format. A 30-device network in ~50 tokens per device. Client listings with signal strength, experience score, and blocked status at a glance.
 - **Write-gated mutations** — client block/unblock/reconnect, WLAN and traffic-route toggles, device restart, network CRUD, and generic Integration API resource CRUD require explicit opt-in via `UNIFI_WRITE_ENABLED=true`. Confirm-gated writes additionally require per-call `confirm=true`.
 - **Multi-controller** — manage home and office networks from a single MCP instance. Each controller authenticates independently with separate sessions.
@@ -19,7 +19,7 @@ UniFi controllers expose a rich but undocumented REST API behind cookie-based au
 
 | | ubiquiti-unifi-blade-mcp | sirkirby/unifi-mcp | enuno/unifi-mcp-server |
 |---|---|---|---|
-| **Focus** | Monitoring + security + Integration-API resource mgmt (32 tools) | Full management (161 tools) | Full management (74 tools) |
+| **Focus** | Monitoring + security + Integration-API resource mgmt (33 tools) | Full management (161 tools) | Full management (74 tools) |
 | **Design for** | LLM agents (token-efficient) | Claude Code (lazy loading) | General MCP clients |
 | **Multi-controller** | Native (env var config) | Single controller | Multi-mode (local/cloud) |
 | **Write safety** | Dual-gated (env + confirm) | Preview-then-confirm | Permission model |
@@ -112,7 +112,7 @@ The monitoring tools authenticate via username/password. Rather than using your 
 
 7. Set `UNIFI_USERNAME` and `UNIFI_PASSWORD` to the account's credentials. Use the `mcp-ro` credentials by default; switch to `mcp-rw` only for sessions where `UNIFI_WRITE_ENABLED=true`.
 
-## 32 tools, 7 categories
+## 33 tools, 7 categories
 
 ### Info & Sites (3 tools)
 
@@ -153,7 +153,7 @@ Evidence semantics:
 - **DHCP Reservation** means UniFi is configured to assign an IP to a MAC. It does not mean the host is currently alive.
 - **Connected Client** means UniFi currently sees the device active on the network. It does not mean the IP is reserved.
 
-### Firewall & Security (5 tools) — ⚠️ unofficial API (read-only)
+### Firewall & Security (6 tools) — ⚠️ unofficial API (read-only)
 
 These read views ride the **unofficial** private API (see the auth warning above). For *managed* firewall, use the official `unifi_resource_*` tools with `firewall_policies` / `firewall_zones` / `acl_rules`.
 
@@ -164,6 +164,7 @@ These read views ride the **unofficial** private API (see the auth warning above
 | `unifi_traffic_rules` | Traffic rules — description, action, enabled/disabled | ~25/rule |
 | `unifi_port_forwards` | Port forwards — name, protocol, external → internal | ~30/fwd |
 | `unifi_dpi` | DPI restriction groups and apps | ~20/item |
+| `unifi_sitemagic_networks` | Site Magic tunnels and peer-advertised subnets | ~25/tunnel |
 
 ### Write Operations (9 dedicated tools, gated)
 
@@ -336,7 +337,7 @@ Server. Full workflow and provenance are in
 
 ```
 src/ubiquiti_unifi_blade_mcp/
-├── server.py       — FastMCP server, 32 @mcp.tool decorators
+├── server.py       — FastMCP server, 33 @mcp.tool decorators
 ├── client.py       — UniFiClient: aiounifi session auth + Integration API (X-API-KEY) generic resource layer, multi-controller, credential scrubbing
 ├── formatters.py   — Token-efficient output (pipe-delimited, null omission, human units)
 ├── models.py       — Controller config, auth modes, write gate, network payload builder

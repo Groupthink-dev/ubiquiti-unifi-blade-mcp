@@ -19,3 +19,7 @@ _Avoid_: DNS policy, static-DNS record, local-DNS override
 **Record Value**:
 The normalized target data of a Local DNS Record, such as an IP address for an A or AAAA record or a canonical name for a CNAME record.
 _Avoid_: content, data, rdata
+
+**Site Magic Advertised Subnet**:
+A local-network CIDR a peer site advertises into the UniFi Site Magic SD-WAN mesh, as recorded on this console's tunnel config (`remote_vpn_subnets`). It is evidence of routing intent over the mesh, not evidence the route currently converges.
+_Avoid_: VPN subnet, remote network, SD-WAN route

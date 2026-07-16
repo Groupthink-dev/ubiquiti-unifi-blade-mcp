@@ -1,12 +1,12 @@
 # ubiquiti-unifi-blade-mcp
 
-UniFi monitoring, security, and Integration-API resource management MCP. 32 tools, token-efficient output, multi-controller.
+UniFi monitoring, security, and Integration-API resource management MCP. 33 tools, token-efficient output, multi-controller.
 
 ## Architecture
 
 ```
 src/ubiquiti_unifi_blade_mcp/
-├── server.py       — FastMCP 3.x server, 32 @mcp.tool decorators (incl. unifi_controllers discovery + _write_gate multi-console safety)
+├── server.py       — FastMCP 3.x server, 33 @mcp.tool decorators (incl. unifi_controllers discovery + _write_gate multi-console safety)
 ├── client.py       — UniFiClient: aiounifi session auth + Integration API (X-API-KEY) generic resource layer, multi-controller, credential scrubbing
 ├── formatters.py   — Token-efficient output (pipe-delimited, null omission, human units) + generic resource formatters
 ├── models.py       — ControllerConfig (auth_mode), write gate, parse_controllers(), network_spec_from_args()
@@ -37,6 +37,7 @@ make run            # Start MCP server (stdio)
 - **Generic resource layer** — `integration_list/get/create/update/delete(resource, …)` + the `_INTEGRATION_RESOURCES` map (logical name → `(path, read_only)`) are the single place resource paths live. Exposed via 5 `unifi_resource_*` tools (resource enum `ResourceName` in server.py). Paths are source-verified (Art-of-WiFi v10 client): `networks`, `wifi/broadcasts`, `firewall/policies`, `firewall/zones`, `acl-rules`, `dns/policies`, `traffic-matching-lists`, `hotspot/vouchers`, `wans`, `radius/profiles`, `vpn/servers`, `vpn/site-to-site-tunnels`, `device-tags` — NOT the camelCase you'd guess. Add/correct a resource in ONE place (the map).
 - **Local DNS Records** — `unifi_dns_records` is the dedicated read contract over Integration API `dns/policies`; it filters to record-shaped objects and emits `name | TYPE | value=... | ttl=... | enabled`. `unifi_resource_list dns_policies` remains the generic/raw-ish debug path and also surfaces `value=`.
 - **DHCP Reservations** — `unifi_dhcp_reservations` is session-auth only and reads legacy `/rest/user` via `ctrl.request(ApiRequest("get", path, None))`; `aiounifi.ApiRequest` prepends `/proxy/network/api/s/{site}` (UniFi OS) or `/api/s/{site}` (classic), so do NOT include `/api/s/{site}` in the path. Include only active reservation intent (`use_fixedip` truthy + `fixed_ip` + `mac`), including offline clients. Do NOT use `ctrl.clients` for reservations; connected clients are active-only and are a different evidence class.
+- **Site Magic advertised subnets** — `unifi_sitemagic_networks` is session-auth only and reads legacy `/rest/networkconf` via `ctrl.request(ApiRequest("get", path, None))`. Include only `purpose == "site-vpn"` rows with `sdwan_remote_site_id`; `remote_vpn_subnets` are peer routing intent, not evidence that routes currently converge. Do NOT add this cookie-only endpoint to `_INTEGRATION_RESOURCES`.
 - **Evidence language** — Connected Client = currently active on the network; DHCP Reservation = UniFi intends to assign an IP to a MAC; Local DNS Record = UniFi intends local name resolution. Do not overclaim liveness or public-DNS intent from these tools.
 - **Not in the Integration API** — port forwards, traffic routes/rules, QoS, port profiles are absent from the official API; they stay on the legacy aiounifi read tools. Don't add them to `_INTEGRATION_RESOURCES`.
 - **networkconf is cookie-only** — the legacy private `/api/s/{site}/rest/networkconf` endpoint does NOT honor `X-API-KEY`; the Integration API `networks` resource is the X-API-KEY write path (Network 10.x).

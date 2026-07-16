@@ -574,6 +574,55 @@ class TestEvidenceClient:
             },
         ]
 
+    async def test_get_sitemagic_networks_uses_rest_networkconf_and_filters(
+        self, mock_env: None, mocker: MockerFixture
+    ) -> None:
+        client = UniFiClient()
+        fake_ctrl = mocker.MagicMock()
+        fake_ctrl.connectivity.config.site = "default"
+        fake_ctrl.request = mocker.AsyncMock(
+            return_value={
+                "data": [
+                    {
+                        "name": "Site Magic MR",
+                        "purpose": "site-vpn",
+                        "ifname": "wgsts1001",
+                        "sdwan_remote_site_id": "665a0c0000000000000000e1",
+                        "remote_vpn_subnets": ["10.3.10.0/24", "10.3.20.0/24"],
+                    },
+                    {
+                        "name": "Branch",
+                        "purpose": "site-vpn",
+                        "sdwan_remote_site_id": "sites/665b0000000000000000e2",
+                    },
+                    {"name": "LAN", "purpose": "corporate"},
+                    {"name": "Manual VPN", "purpose": "site-vpn"},
+                ]
+            }
+        )
+        mocker.patch.object(client, "_call", return_value=fake_ctrl)
+
+        tunnels = await client.get_sitemagic_networks()
+
+        req = fake_ctrl.request.await_args.args[0]
+        assert req.method == "get"
+        assert req.path == "/rest/networkconf"
+        assert req.data is None
+        assert tunnels == [
+            {
+                "name": "Branch",
+                "ifname": "",
+                "peer_site_id": "665b0000000000000000e2",
+                "remote_vpn_subnets": [],
+            },
+            {
+                "name": "Site Magic MR",
+                "ifname": "wgsts1001",
+                "peer_site_id": "665a0c0000000000000000e1",
+                "remote_vpn_subnets": ["10.3.10.0/24", "10.3.20.0/24"],
+            },
+        ]
+
 
 class TestDualAuthMode:
     """Prove a controller with both session creds AND an API key serves both tool families.
